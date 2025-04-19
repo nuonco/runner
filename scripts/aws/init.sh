@@ -3,7 +3,7 @@
 get_tag() {
     local tag_name=$1
     local instance_id=$(ec2-metadata -i | awk '{ print $2 }')
-    
+
     aws ec2 describe-tags \
         --filters "Name=resource-id,Values=$instance_id" "Name=key,Values=$tag_name" \
         --query 'Tags[0].Value' \
@@ -42,7 +42,7 @@ User=runner
 ExecStartPre=-/usr/bin/docker exec %n stop
 ExecStartPre=-/usr/bin/docker rm %n
 ExecStartPre=/usr/bin/docker pull public.ecr.aws/p7e3r5y0/runner:latest
-ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --detach --env-file /opt/nuon/runner/env public.ecr.aws/p7e3r5y0/runner:latest run
+ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --detach --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID public.ecr.aws/p7e3r5y0/runner:latest run
 Restart=always
 RestartSec=3
 
