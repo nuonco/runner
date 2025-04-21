@@ -13,6 +13,7 @@ get_tag() {
 RUNNER_ID=$(get_tag "nuon_runner_id")
 RUNNER_API_TOKEN=$(get_tag "nuon_runner_api_token")
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
+AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 yum install -y docker amazon-cloudwatch-agent
 systemctl enable --now docker
