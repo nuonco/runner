@@ -43,9 +43,9 @@ User=runner
 ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=/usr/bin/docker pull public.ecr.aws/p7e3r5y0/runner:latest
-ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --detach --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID public.ecr.aws/p7e3r5y0/runner:latest run
+ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID public.ecr.aws/p7e3r5y0/runner:latest run
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=default.target
