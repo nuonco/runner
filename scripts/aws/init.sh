@@ -3,7 +3,7 @@
 get_tag() {
     local tag_name=$1
     local instance_id=$(ec2-metadata -i | awk '{ print $2 }')
-    
+
     aws ec2 describe-tags \
         --filters "Name=resource-id,Values=$instance_id" "Name=key,Values=$tag_name" \
         --query 'Tags[0].Value' \
@@ -13,6 +13,7 @@ get_tag() {
 RUNNER_ID=$(get_tag "nuon_runner_id")
 RUNNER_API_TOKEN=$(get_tag "nuon_runner_api_token")
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
+AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 yum install -y docker amazon-cloudwatch-agent
 systemctl enable --now docker
@@ -39,12 +40,12 @@ Requires=docker.service
 [Service]
 TimeoutStartSec=0
 User=runner
-ExecStartPre=-/usr/bin/docker exec %n stop
-ExecStartPre=-/usr/bin/docker rm %n
+ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
+ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=/usr/bin/docker pull public.ecr.aws/p7e3r5y0/runner:latest
-ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --detach --env-file /opt/nuon/runner/env public.ecr.aws/p7e3r5y0/runner:latest run
+ExecStart=/usr/bin/docker run --rm --name %n -p 5000:5000 --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID public.ecr.aws/p7e3r5y0/runner:latest run
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=default.target
