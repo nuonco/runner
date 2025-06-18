@@ -35,8 +35,8 @@ echo "Fetching runner settings from $RUNNER_API_URL/v1/runners/$RUNNER_ID/settin
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
 
 # Extract container image URL and tag from the response
-CONTAINER_IMAGE_URL=$(echo $RUNNER_SETTINGS | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
-CONTAINER_IMAGE_TAG=$(echo $RUNNER_SETTINGS | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
+CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
+CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
 
 echo "Using container image: $CONTAINER_IMAGE_URL:$CONTAINER_IMAGE_TAG"
 
