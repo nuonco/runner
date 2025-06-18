@@ -30,6 +30,17 @@ RUNNER_API_URL=$RUNNER_API_URL
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
 
+# Fetch runner settings from the API
+echo "Fetching runner settings from $RUNNER_API_URL/v1/runners/$RUNNER_ID/settings"
+RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
+
+# Extract container image URL and tag from the response
+CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
+CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
+
+echo "Using container image: $CONTAINER_IMAGE_URL:$CONTAINER_IMAGE_TAG"
+
+
 # Create systemd unit file for runner
 cat << EOF > /etc/systemd/system/nuon-runner.service
 [Unit]
@@ -43,8 +54,8 @@ User=runner
 ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=-/bin/sh -c "yes | /usr/bin/docker system prune"
-ExecStartPre=/usr/bin/docker pull public.ecr.aws/p7e3r5y0/runner:latest
-ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750g" --cpus="1.75" --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID public.ecr.aws/p7e3r5y0/runner:latest run
+ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL:-public.ecr.aws/p7e3r5y0/runner}:${CONTAINER_IMAGE_TAG:-latest}
+ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750g" --cpus="1.75" --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=$AWS_REGION --log-opt awslogs-group=runner-$RUNNER_ID ${CONTAINER_IMAGE_URL:-public.ecr.aws/p7e3r5y0/runner}:${CONTAINER_IMAGE_TAG:-latest} run
 Restart=always
 RestartSec=5
 
