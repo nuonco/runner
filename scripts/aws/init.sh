@@ -1,4 +1,35 @@
-#!bin/bash
+#!/bin/bash
+
+#
+# install dependencies
+#
+
+yum install -y docker amazon-cloudwatch-agent
+systemctl enable --now docker
+
+#
+# set up user, home directory, and subdirs for the runner
+#
+
+useradd runner -G docker -c "" -d /opt/nuon/runner
+usermod -a -G root runner # TODO(fd): root?
+mkdir -p /opt/nuon/runner/bin
+mkdir -p /opt/nuon/runner/.config/systemd/user
+Chown -R runner:runner /opt/nuon/runner
+
+# nopassword root access
+cat << EOF > /etc/sudoers.d/runner
+runner ALL= NOPASSWD: `which systemctl` enable --system nuon-runner.service
+runner ALL= NOPASSWD: `which systemctl` start --system nuon-runner.service
+runner ALL= NOPASSWD: `which systemctl` stop --system nuon-runner.service
+runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
+runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
+runner ALL= NOPASSWD: `which shutdown` -h now
+EOF
+
+#
+# gather some facts
+#
 
 get_tag() {
     local tag_name=$1
@@ -15,75 +46,63 @@ RUNNER_API_TOKEN=$(get_tag "nuon_runner_api_token")
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
-yum install -y docker amazon-cloudwatch-agent
-systemctl enable --now docker
+# gather facts for container image
 
-# Set up things for the runner
-useradd runner -G docker -c "" -d /opt/nuon/runner
-chown -R runner:runner /opt/nuon/runner
-
-cat << EOF > /opt/nuon/runner/env
-RUNNER_ID=$RUNNER_ID
-RUNNER_API_TOKEN=$RUNNER_API_TOKEN
-RUNNER_API_URL=$RUNNER_API_URL
-AWS_REGION=$AWS_REGION
-# FIXME(sdboyer) this hack must be fixed - userdata is only run on instance creation, and ip can change on each boot
-HOST_IP=$(curl -s https://checkip.amazonaws.com)
-EOF
-
-
-# this ⤵ is wrapped w/ single quotes to prevent variable expansion.
-cat << 'EOF' > /opt/nuon/runner/get_image_tag.sh
-#!/bin/sh
-
-set -u
-
-# source this file to get some env vars
-source /opt/nuon/runner/env
-
-# Fetch runner settings from the API
-echo "Fetching runner settings from $RUNNER_API_URL/v1/runners/$RUNNER_ID/settings"
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
-
-# Extract container image URL and tag from the response
 CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
 
-# echo into a file for easier retrieval; re-create the file to avoid duplicate values.
-rm -f /opt/nuon/runner/image
-echo "CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL" >> /opt/nuon/runner/image
-echo "CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG" >> /opt/nuon/runner/image
+#
+# create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
+#
 
-# export so we can get these values by sourcing this file
-export CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
-export CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
-
-echo "Using container image: $CONTAINER_IMAGE_URL:$CONTAINER_IMAGE_TAG"
+# NOTE: HOST_IP: userdata is only run on instance creation, and ip can change on each boot. we set it "up front" here but it
+# should be fetched fresh by the `runner mng` process whnever the env file is recreated.
+cat << EOF > /opt/nuon/runner/env
+RUNNER_ID=$RUNNER_ID
+RUNNER_API_URL=$RUNNER_API_URL
+AWS_REGION=$AWS_REGION
+HOST_IP=$(curl -s https://checkip.amazonaws.com)
+GIT_REF="local-binary"
 EOF
 
-sh /opt/nuon/runner/get_image_tag.sh
+cat << EOF > /opt/nuon/runner/token
+RUNNER_API_TOKEN=$RUNNER_API_TOKEN
+EOF
 
+cat << EOF > /opt/nuon/runner/image
+CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
+CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
+EOF
 
-# Create systemd unit file for runner
-cat << 'EOF' > /etc/systemd/system/nuon-runner.service
+# chown again, just so they know who's boss
+chown -R runner:runner /opt/nuon/runner
+
+#
+# install runner binary (tag: latest always)
+#
+curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
+chmod +x /tmp/install-runner.sh
+yes | /tmp/install-runner.sh 43aff5cc5d9ecefc048aebc931b3ba75905f7e62 /opt/nuon/runner/bin
+rm /tmp/install-runner.sh
+
+#
+# Create systemd unit file for "runner mng" process
+#
+
+cat << 'EOF' > /etc/systemd/system/nuon-runner-mng.service
 [Unit]
-Description=Nuon Runner Service
-After=docker.service
-Requires=docker.service
+Description=Nuon Runner Mng Service
 
 [Service]
 TimeoutStartSec=0
+StandardOutput=file:/var/log/runner-mng/logs.log
+StandardError=file:/var/log/runner-mng/errors.log
 User=runner
-ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
-ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
-ExecStartPre=-/bin/sh /opt/nuon/runner/get_image_tag.sh
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
-ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG}
-ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750g" --cpus="1.75" --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=${AWS_REGION} --log-opt awslogs-group=runner-${RUNNER_ID} ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG} run
-ExecStopPost=-/bin/sh -c "rm -rf /tmp/nuon-runner/*"
-ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q)"
-ExecStopPost=-/bin/sh -c "yes | /usr/bin/docker system prune"
+EnvironmentFile=/opt/nuon/runner/token
+ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=5
 
@@ -91,8 +110,17 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
+#
+# create file and grant ownership
+#
 
+chown runner:runner /etc/systemd/system/nuon-runner.service
+
+#
 # Just in case SELinux might be unhappy
-/sbin/restorecon -v /etc/systemd/system/nuon-runner.service
+#
+
+/sbin/restorecon -v /etc/systemd/system/nuon-runner-mng.service
 systemctl daemon-reload
-systemctl enable --now nuon-runner
+systemctl enable nuon-runner-mng
+systemctl start nuon-runner-mng
