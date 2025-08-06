@@ -17,13 +17,11 @@ mkdir -p /opt/nuon/runner/bin
 mkdir -p /opt/nuon/runner/.config/systemd/user
 Chown -R runner:runner /opt/nuon/runner
 
-# nopassword root access
+#
+# commands which we want to be able to run w/ passwordless sudo
+# fallback for shutdown
+#
 cat << EOF > /etc/sudoers.d/runner
-runner ALL= NOPASSWD: `which systemctl` enable --system nuon-runner.service
-runner ALL= NOPASSWD: `which systemctl` start --system nuon-runner.service
-runner ALL= NOPASSWD: `which systemctl` stop --system nuon-runner.service
-runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
-runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
 runner ALL= NOPASSWD: `which shutdown` -h now
 EOF
 
