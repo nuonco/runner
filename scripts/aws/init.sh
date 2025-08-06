@@ -4,7 +4,7 @@
 # install dependencies
 #
 
-yum install -y docker amazon-cloudwatch-agent
+yum install -y docker amazon-cloudwatch-agent polkit
 systemctl enable --now docker
 
 #
@@ -25,6 +25,36 @@ runner ALL= NOPASSWD: `which systemctl` stop --system nuon-runner.service
 runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
 runner ALL= NOPASSWD: `which systemctl` restart --system nuon-runner.service
 runner ALL= NOPASSWD: `which shutdown` -h now
+EOF
+
+#
+# grant group:runner permission to manage the nuon-runner.service via systemd
+#
+
+cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      action.lookup("unit") == "nuon-runner.service" &&
+      subject.isInGroup("runner")) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+
+
+#
+# grant group:runner permission to shutdown and reboot the VM
+#
+cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
+polkit.addRule(function(action, subject) {
+    if (
+        action.id.includes("org.freedesktop.login1.power") ||
+        action.id.includes("org.freedesktop.login1.reboot") ||
+        action.id.includes("org.freedesktop.login1.set-reboot-") ||
+    ) {
+        return polkit.Result.YES;
+    }
+});
 EOF
 
 #
