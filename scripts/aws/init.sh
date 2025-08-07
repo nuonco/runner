@@ -19,10 +19,9 @@ chown -R runner:runner /opt/nuon/runner
 
 #
 # commands which we want to be able to run w/ passwordless sudo
-# fallback for shutdown
+# 1. fallback for shutdown
 #
 cat << EOF > /etc/sudoers.d/runner
-runner ALL= NOPASSWD: `which systemctl` enable nuon-runner.service
 runner ALL= NOPASSWD: `which shutdown` -h now
 EOF
 
@@ -31,6 +30,12 @@ EOF
 #
 
 cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("runner")) {
+        return polkit.Result.YES;
+    }
+});
+
 polkit.addRule(function(action, subject) {
     if (
         action.id == "org.freedesktop.systemd1.manage-units" &&
