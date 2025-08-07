@@ -15,13 +15,14 @@ useradd runner -G docker -c "" -d /opt/nuon/runner
 usermod -a -G root runner # TODO(fd): root?
 mkdir -p /opt/nuon/runner/bin
 mkdir -p /opt/nuon/runner/.config/systemd/user
-Chown -R runner:runner /opt/nuon/runner
+chown -R runner:runner /opt/nuon/runner
 
 #
 # commands which we want to be able to run w/ passwordless sudo
 # fallback for shutdown
 #
 cat << EOF > /etc/sudoers.d/runner
+runner ALL= NOPASSWD: `which systemctl` enable nuon-runner.service
 runner ALL= NOPASSWD: `which shutdown` -h now
 EOF
 
@@ -31,11 +32,13 @@ EOF
 
 cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
 polkit.addRule(function(action, subject) {
-  if (action.id == "org.freedesktop.systemd1.manage-units" &&
-      action.lookup("unit") == "nuon-runner.service" &&
-      subject.isInGroup("runner")) {
-    return polkit.Result.YES;
-  }
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "nuon-runner.service" &&
+        subject.isInGroup("runner")
+    ) {
+        return polkit.Result.YES;
+    }
 });
 EOF
 
@@ -46,14 +49,21 @@ EOF
 cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
 polkit.addRule(function(action, subject) {
     if (
-        action.id.includes("org.freedesktop.login1.power") ||
-        action.id.includes("org.freedesktop.login1.reboot") ||
-        action.id.includes("org.freedesktop.login1.set-reboot-") ||
+      (
+        action.id.includes("org.freedesktop.login1.power")      ||
+        action.id.includes("org.freedesktop.login1.reboot")     ||
+        action.id.includes("org.freedesktop.login1.set-reboot-")
+      ) && subject.isInGroup("runner")
     ) {
         return polkit.Result.YES;
     }
 });
 EOF
+
+#
+# restart polkit so policies take effect
+#
+systemctl restart polkit.service
 
 #
 # gather some facts
@@ -111,8 +121,15 @@ chown -R runner:runner /opt/nuon/runner
 #
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh 43aff5cc5d9ecefc048aebc931b3ba75905f7e62 /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh 278e7c0683a89a88f5d9d7f0ea9b1464f0c11241 /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
+
+
+#
+# create directory for logs
+# TODO(fd): send logs to cloudwatch
+#
+mkdir /var/log/nuon-runner-mng
 
 #
 # Create systemd unit file for "runner mng" process
@@ -124,8 +141,8 @@ Description=Nuon Runner Mng Service
 
 [Service]
 TimeoutStartSec=0
-StandardOutput=file:/var/log/runner-mng/logs.log
-StandardError=file:/var/log/runner-mng/errors.log
+StandardOutput=file:/var/log/nuon-runner-mng/logs.log
+StandardError=file:/var/log/nuon-runner-mng/errors.log
 User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
@@ -142,7 +159,7 @@ EOF
 # create file and grant ownership
 #
 
-chown runner:runner /etc/systemd/system/nuon-runner.service
+chown runner:runner /etc/systemd/system/nuon-runner-mng.service
 
 #
 # Just in case SELinux might be unhappy
