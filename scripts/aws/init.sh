@@ -3,14 +3,14 @@
 #
 # install dependencies
 #
-
+#
 yum install -y docker amazon-cloudwatch-agent polkit
 systemctl enable --now docker
 
 #
 # set up user, home directory, and subdirs for the runner
 #
-
+#
 useradd runner -G docker -c "" -d /opt/nuon/runner
 usermod -a -G root runner # TODO(fd): root?
 mkdir -p /opt/nuon/runner/bin
@@ -19,7 +19,8 @@ chown -R runner:runner /opt/nuon/runner
 
 #
 # commands which we want to be able to run w/ passwordless sudo
-# 1. fallback for shutdown
+# - fallback for shutdown
+#
 #
 cat << EOF > /etc/sudoers.d/runner
 runner ALL= NOPASSWD: `which shutdown` -h now
@@ -47,10 +48,10 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-
 #
 # grant group:runner permission to shutdown and reboot the VM
 #
+
 cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
 polkit.addRule(function(action, subject) {
     if (
@@ -68,6 +69,7 @@ EOF
 #
 # restart polkit so policies take effect
 #
+
 systemctl restart polkit.service
 
 #
@@ -99,14 +101,14 @@ CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"
 # create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
 #
 
-# NOTE: HOST_IP: userdata is only run on instance creation, and ip can change on each boot. we set it "up front" here but it
-# should be fetched fresh by the `runner mng` process whnever the env file is recreated.
+# NOTE: HOST_IP: userdata is only run on instance creation, and ip can change on each boot. we set it "up front" here.
+# in all likelihood, the runner vm will have restarted if the ip has changed.
 cat << EOF > /opt/nuon/runner/env
 RUNNER_ID=$RUNNER_ID
 RUNNER_API_URL=$RUNNER_API_URL
+GIT_REF="local-binary"
 AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
-GIT_REF="local-binary"
 EOF
 
 cat << EOF > /opt/nuon/runner/token
@@ -126,7 +128,7 @@ chown -R runner:runner /opt/nuon/runner
 #
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh 84cdf45c482f6e81a7a40b4aa551adb12f412d39 /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh 4ecdb829a3127d4e94d5c380e6d13981e7f0a5b5 /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 
