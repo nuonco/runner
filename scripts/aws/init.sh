@@ -126,7 +126,7 @@ chown -R runner:runner /opt/nuon/runner
 #
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh 278e7c0683a89a88f5d9d7f0ea9b1464f0c11241 /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh 84cdf45c482f6e81a7a40b4aa551adb12f412d39 /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 
