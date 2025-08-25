@@ -119,6 +119,7 @@ EOF
 
 #
 # install runner binary (tag: latest always)
+# NOTE(fd): we want a pre-release version for a moment while we test the new commands
 #
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
