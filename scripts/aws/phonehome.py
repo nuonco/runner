@@ -7,7 +7,7 @@ http = urllib3.PoolManager()
 
 
 def lambda_handler(event, context):
-    if event["RequestType"].startswith("DeleteFunction"):
+    if event["RequestType"] == "Delete":
         cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
         return
 
