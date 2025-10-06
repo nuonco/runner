@@ -17,6 +17,8 @@ def lambda_handler(event, context):
     data = event.copy()
     # Remove ResourceProperties since we'll flatten those separately
     props = data.pop("ResourceProperties", None)
+
+    props["request_type"] = event["RequestType"]
     
     encoded_data = json.dumps(props).encode("utf-8")
     url = props["url"]
