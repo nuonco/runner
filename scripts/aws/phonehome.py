@@ -18,6 +18,7 @@ def lambda_handler(event, context):
     
     encoded_data = json.dumps(props).encode("utf-8")
     url = props["url"]
+    print(props)
 
     try:
         response = http.request(
