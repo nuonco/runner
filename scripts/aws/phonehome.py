@@ -6,8 +6,8 @@ import cfnresponse
 
 http = urllib3.PoolManager()
 
-MAX_RETRIES = 3
-BASE_DELAY = 1
+MAX_RETRIES = 5
+BASE_DELAY = 1.75
 
 
 def lambda_handler(event, context):
@@ -44,7 +44,7 @@ def lambda_handler(event, context):
             print(f"Attempt {attempt + 1}/{MAX_RETRIES} error: {last_error}")
 
         if attempt < MAX_RETRIES - 1:
-            delay = BASE_DELAY * (2 ** attempt)
+            delay = BASE_DELAY * (2**attempt)
             print(f"Retrying in {delay}s...")
             time.sleep(delay)
 
