@@ -40,6 +40,7 @@ def lambda_handler(event, context):
             last_error = f"HTTP {response.status}: {response.data}"
             print(f"Attempt {attempt + 1}/{MAX_RETRIES} failed: {last_error}")
         except Exception as e:
+            # It's OK if notifying Nuon fails on deletion
             last_error = str(e)
             print(f"Attempt {attempt + 1}/{MAX_RETRIES} error: {last_error}")
 
