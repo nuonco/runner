@@ -82,8 +82,8 @@ EnvironmentFile=/opt/nuon/runner/env
 ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG}
 ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750g" --cpus="1.75" --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=${AWS_REGION} --log-opt awslogs-group=runner-${RUNNER_ID} ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG} run
 ExecStopPost=-/bin/sh -c "rm -rf /tmp/nuon-runner/*"
-ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q)"
-ExecStopPost=-/bin/sh -c "yes | /usr/bin/docker system prune"
+ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q --filter 'until=1h')"
+ExecStopPost=-/bin/sh -c "/usr/bin/docker system prune -a -f --filter 'until=1h'"
 Restart=always
 RestartSec=5
 
