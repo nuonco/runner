@@ -86,6 +86,7 @@ ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q)"
 ExecStopPost=-/bin/sh -c "yes | /usr/bin/docker system prune"
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target

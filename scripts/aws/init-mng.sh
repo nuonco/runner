@@ -187,6 +187,7 @@ Environment="GIT_REF=latest"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target
