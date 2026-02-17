@@ -87,12 +87,12 @@ get_tag() {
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 
 #
-# install runner binary (tag: latest always)
+# install runner binary (tag: 5220110 [test])
 #
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh "5220110" /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
@@ -193,7 +193,7 @@ User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 EnvironmentFile=/opt/nuon/runner/token
-Environment="GIT_REF=latest"
+Environment="GIT_REF=5220110"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
