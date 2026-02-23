@@ -37,10 +37,10 @@ HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
 
 cat << 'EOF' > /opt/nuon/runner/get_image_tag.sh
-#!/bin/sh
+#!/bin/bash
 set -u
 
-source /opt/nuon/runner/env
+. /opt/nuon/runner/env
 
 echo "Fetching runner settings from $RUNNER_API_URL/v1/runners/$RUNNER_ID/settings"
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
@@ -58,7 +58,7 @@ export CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
 echo "Using container image: $CONTAINER_IMAGE_URL:$CONTAINER_IMAGE_TAG"
 EOF
 
-sh /opt/nuon/runner/get_image_tag.sh
+bash /opt/nuon/runner/get_image_tag.sh
 
 cat << 'EOF' > /etc/systemd/system/nuon-runner.service
 [Unit]
@@ -71,7 +71,7 @@ TimeoutStartSec=0
 User=runner
 ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
 ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
-ExecStartPre=-/bin/sh /opt/nuon/runner/get_image_tag.sh
+ExecStartPre=-/bin/bash /opt/nuon/runner/get_image_tag.sh
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG}
