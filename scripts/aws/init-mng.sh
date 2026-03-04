@@ -84,13 +84,39 @@ get_tag() {
         --output text
 }
 
-RUNNER_ID=$(get_tag "nuon_runner_id")
-RUNNER_API_TOKEN=$(get_tag "nuon_runner_api_token")
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
+
+#
+# install runner binary (tag: latest always)
+#
+
+curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
+chmod +x /tmp/install-runner.sh
+yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+rm /tmp/install-runner.sh
+
+#
+# change ownership - ensure user runner can execute the runner binary
+#
+
+chown -R runner:runner /opt/nuon/runner
+
+# run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
+while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" ./opt/nuon/runner/bin/runner mng fetch-token; do
+  echo "mng fetch-token failed, retrying in 15s"
+  sleep 15
+done
+
+
+#
+# gather more facts
+#
+
+RUNNER_ID=$(get_tag "nuon_runner_id")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 # gather facts for container image
-
+RUNNER_API_TOKEN=$(cat /opt/nuon/runner/token | cut -d '=' -f 2)
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
 CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
@@ -108,28 +134,12 @@ AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
 
-cat << EOF > /opt/nuon/runner/token
-RUNNER_API_TOKEN=$RUNNER_API_TOKEN
-EOF
-
 cat << EOF > /opt/nuon/runner/image
 CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
 CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
 EOF
 
-#
-# install runner binary (tag: latest always)
-#
-
-curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
-chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
-rm /tmp/install-runner.sh
-
-#
-# change ownership - ensure user runner can execute the runner binary
-#
-
+# grant the runner ownership over the files here
 chown -R runner:runner /opt/nuon/runner
 
 #
@@ -187,7 +197,6 @@ Environment="GIT_REF=latest"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target
