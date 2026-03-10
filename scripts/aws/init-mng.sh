@@ -87,12 +87,12 @@ get_tag() {
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 
 #
-# install runner binary (tag: latest always)
+# install runner binary (tag: b453e57 always)
 #
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh b453e57 /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
@@ -102,11 +102,15 @@ rm /tmp/install-runner.sh
 chown -R runner:runner /opt/nuon/runner
 
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
-while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" ./opt/nuon/runner/bin/runner mng fetch-token; do
+# capture the token directly without storing it on disk
+while true; do
+  TOKEN_OUTPUT=$(sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" ./opt/nuon/runner/bin/runner mng fetch-token --json 2>&1) && break
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
 done
 
+RUNNER_API_TOKEN=$(echo "$TOKEN_OUTPUT" | jq -r '.token')
+rm -f /opt/nuon/runner/token
 
 #
 # gather more facts
@@ -114,9 +118,6 @@ done
 
 RUNNER_ID=$(get_tag "nuon_runner_id")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
-
-# gather facts for container image
-RUNNER_API_TOKEN=$(cat /opt/nuon/runner/token | cut -d '=' -f 2)
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
 CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
@@ -192,8 +193,7 @@ StandardError=file:/var/log/nuon-runner-mng/errors.log
 User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
-EnvironmentFile=/opt/nuon/runner/token
-Environment="GIT_REF=latest"
+Environment="GIT_REF=b453e57"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
