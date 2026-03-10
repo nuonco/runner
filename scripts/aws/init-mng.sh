@@ -87,12 +87,12 @@ get_tag() {
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 
 #
-# install runner binary (tag: b453e57 always)
+# install runner binary (tag: 88969e0 always)
 #
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh b453e57 /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh 88969e0 /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
@@ -110,7 +110,6 @@ while true; do
 done
 
 RUNNER_API_TOKEN=$(echo "$TOKEN_OUTPUT" | jq -r '.token')
-rm -f /opt/nuon/runner/token
 
 #
 # gather more facts
@@ -123,7 +122,7 @@ CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
 
 #
-# create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
+# create env files (env, image). these env files are used by the systemd unit files AND by the processes they manage.
 #
 
 # NOTE: HOST_IP: userdata is only run on instance creation, and ip can change on each boot. we set it "up front" here.
@@ -193,7 +192,7 @@ StandardError=file:/var/log/nuon-runner-mng/errors.log
 User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
-Environment="GIT_REF=b453e57"
+Environment="GIT_REF=88969e0"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
