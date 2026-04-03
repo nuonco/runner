@@ -30,29 +30,51 @@ runner ALL= NOPASSWD: $(which shutdown) -h now
 EOF
 
 #
-# grant group:runner permission to manage nuon-runner.service and shutdown/reboot
-# Ubuntu 22.04 uses policykit-1 (0.105) with .pkla files, not JS rules
+# grant group:runner permission to manage the nuon-runner.service via systemd
+# Requires polkit >= 0.106 (Ubuntu 24.04+)
 #
 
-mkdir -p /etc/polkit-1/localauthority/50-local.d
+cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("runner")) {
+        return polkit.Result.YES;
+    }
+});
 
-cat << 'EOF' > /etc/polkit-1/localauthority/50-local.d/50-runner-manage-nuon-service.pkla
-[Allow runner to manage nuon-runner service]
-Identity=unix-group:runner
-Action=org.freedesktop.systemd1.manage-units;org.freedesktop.systemd1.reload-daemon
-ResultAny=yes
-ResultInactive=yes
-ResultActive=yes
+polkit.addRule(function(action, subject) {
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "nuon-runner.service" &&
+        subject.isInGroup("runner")
+    ) {
+        return polkit.Result.YES;
+    }
+});
 EOF
 
-cat << 'EOF' > /etc/polkit-1/localauthority/50-local.d/10-runner-shutdown.pkla
-[Allow runner to shutdown and reboot]
-Identity=unix-group:runner
-Action=org.freedesktop.login1.power-off;org.freedesktop.login1.power-off-multiple-sessions;org.freedesktop.login1.reboot;org.freedesktop.login1.reboot-multiple-sessions
-ResultAny=yes
-ResultInactive=yes
-ResultActive=yes
+#
+# grant group:runner permission to shutdown and reboot the VM
+#
+
+cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
+polkit.addRule(function(action, subject) {
+    if (
+      (
+        action.id.includes("org.freedesktop.login1.power")      ||
+        action.id.includes("org.freedesktop.login1.reboot")     ||
+        action.id.includes("org.freedesktop.login1.set-reboot-")
+      ) && subject.isInGroup("runner")
+    ) {
+        return polkit.Result.YES;
+    }
+});
 EOF
+
+#
+# restart polkit so policies take effect
+#
+
+systemctl restart polkit.service
 
 #
 # gather some facts from GCP metadata
