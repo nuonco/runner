@@ -1,4 +1,8 @@
 #!/bin/bash
+set -ex
+
+echo "=== init-mng-v2.sh starting (commit: c136c88) ==="
+echo "=== date: $(date -u) ==="
 
 #
 # install dependencies
@@ -90,7 +94,9 @@ RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
 export RUNNER_VERSION=2b2e398
+echo "=== RUNNER_VERSION=$RUNNER_VERSION ==="
 yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+echo "=== runner binary installed, version: $(/opt/nuon/runner/bin/runner version 2>&1 || echo 'unknown') ==="
 rm /tmp/install-runner.sh
 
 #
@@ -99,6 +105,8 @@ rm /tmp/install-runner.sh
 
 chown -R runner:runner /opt/nuon/runner
 
+echo "=== RUNNER_API_URL=$RUNNER_API_URL ==="
+echo "=== starting fetch-token ==="
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
 while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" CLOUD_PROVIDER=gcp /opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
