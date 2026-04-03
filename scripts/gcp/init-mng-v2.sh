@@ -1,7 +1,9 @@
 #!/bin/bash
+set -e
 
 #
 # install dependencies
+# NOTE: Ubuntu 24.04+ required for polkit JS rules support
 #
 
 apt-get update -y
@@ -89,7 +91,7 @@ RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+/tmp/install-runner.sh --no-input latest /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
