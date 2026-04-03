@@ -7,7 +7,7 @@ set -e
 #
 
 apt-get update -y
-apt-get install -y docker.io polkit
+apt-get install -y docker.io policykit-1
 systemctl enable --now docker
 
 #
