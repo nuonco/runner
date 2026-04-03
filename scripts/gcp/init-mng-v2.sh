@@ -94,7 +94,7 @@ RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-RUNNER_VERSION=${RUNNER_VERSION:-latest}
+RUNNER_VERSION=${RUNNER_VERSION:-2b2e398}
 echo "=== RUNNER_VERSION=$RUNNER_VERSION ==="
 yes | /tmp/install-runner.sh "$RUNNER_VERSION" /opt/nuon/runner/bin
 echo "=== runner binary installed, version: $(/opt/nuon/runner/bin/runner version 2>&1 || echo 'unknown') ==="
