@@ -205,9 +205,23 @@ cat << EOF > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
       "files": {
         "collect_list": [
           {
-            "file_path": "/var/log/nuon-runner-mng/*.log",
+            "file_path": "/var/log/nuon-runner-mng/init.log",
             "log_group_name": "runner-$RUNNER_ID",
-            "log_stream_name": "nuon-runner-mng-{date}",
+            "log_stream_name": "nuon-runner-init.{date}.log",
+            "timezone": "UTC",
+            "from_beginning": true
+          },
+          {
+            "file_path": "/var/log/nuon-runner-mng/logs.log",
+            "log_group_name": "runner-$RUNNER_ID",
+            "log_stream_name": "nuon-runner-mng.{date}.logs",
+            "timezone": "UTC",
+            "from_beginning": true
+          },
+          {
+            "file_path": "/var/log/nuon-runner-mng/errors.log",
+            "log_group_name": "runner-$RUNNER_ID",
+            "log_stream_name": "nuon-runner-mng.{date}.err.logs",
             "timezone": "UTC",
             "from_beginning": true
           }
