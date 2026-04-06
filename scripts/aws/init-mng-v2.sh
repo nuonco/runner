@@ -77,11 +77,15 @@ systemctl restart polkit.service
 get_tag() {
     local tag_name=$1
     local instance_id=$(ec2-metadata -i | awk '{ print $2 }')
+    local value
 
-    aws ec2 describe-tags \
+    value=$(aws ec2 describe-tags \
         --filters "Name=resource-id,Values=$instance_id" "Name=key,Values=$tag_name" \
         --query 'Tags[0].Value' \
-        --output text
+        --output text)
+
+    [ "$value" = "None" ] && value=""
+    echo "$value"
 }
 
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
@@ -113,6 +117,7 @@ done
 #
 
 RUNNER_ID=$(get_tag "nuon_runner_id")
+RUNNER_AUTH_METHOD=$(get_tag "nuon_runner_auth_method")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 # gather facts for container image
@@ -130,6 +135,7 @@ CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"
 cat << EOF > /opt/nuon/runner/env
 RUNNER_ID=$RUNNER_ID
 RUNNER_API_URL=$RUNNER_API_URL
+RUNNER_AUTH_METHOD=${RUNNER_AUTH_METHOD:-sts}
 AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
