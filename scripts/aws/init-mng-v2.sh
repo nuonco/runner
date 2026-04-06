@@ -140,10 +140,16 @@ AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
 
+echo "wrote /opt/nuon/runner/env:"
+cat /opt/nuon/runner/env
+
 cat << EOF > /opt/nuon/runner/image
 CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
 CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
 EOF
+
+echo "wrote /opt/nuon/runner/image:"
+cat /opt/nuon/runner/image
 
 # grant the runner ownership over the files here
 chown -R runner:runner /opt/nuon/runner
