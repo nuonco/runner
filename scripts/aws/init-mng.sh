@@ -1,11 +1,55 @@
 #!/bin/bash
 
+INIT_LOG_DIR=/var/log/nuon-runner-mng
+INIT_LOG_FILE="$INIT_LOG_DIR/init.log"
+
+mkdir -p "$INIT_LOG_DIR"
+touch "$INIT_LOG_FILE"
+
+# Mirror bootstrap output into a dedicated file so CloudWatch can ship it
+# while userdata is still running.
+exec > >(tee -a "$INIT_LOG_FILE") 2>&1
+
+echo "starting init-mng bootstrap"
+
 #
 # install dependencies
 #
 
 yum install -y docker amazon-cloudwatch-agent polkit
 systemctl enable --now docker
+
+INSTANCE_ID=$(ec2-metadata -i | awk '{ print $2 }')
+AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
+
+# Start shipping bootstrap logs immediately instead of waiting until the
+# end of the script, which is too late to capture early failures.
+cat << EOF > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+{
+  "agent": {
+    "region": "$AWS_REGION",
+    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "$INIT_LOG_FILE",
+            "log_group_name": "runner-init",
+            "log_stream_name": "$INSTANCE_ID-init-mng",
+            "timezone": "UTC",
+            "from_beginning": true
+          }
+        ]
+      }
+    },
+    "force_flush_interval": 10
+  }
+}
+EOF
+
+systemctl enable --now amazon-cloudwatch-agent
 
 #
 # set up user, home directory, and subdirs for the runner
@@ -113,7 +157,6 @@ done
 #
 
 RUNNER_ID=$(get_tag "nuon_runner_id")
-AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 # gather facts for container image
 RUNNER_API_TOKEN=$(cat /opt/nuon/runner/token | cut -d '=' -f 2)
@@ -143,11 +186,10 @@ EOF
 chown -R runner:runner /opt/nuon/runner
 
 #
-# create directory for logs
-# TODO(fd): send logs to cloudwatch
+# create directory for runner service logs
 #
 
-mkdir /var/log/nuon-runner-mng
+mkdir -p /var/log/nuon-runner-mng
 
 #
 # configure cloudwatch
@@ -166,7 +208,8 @@ cat << EOF > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
             "file_path": "/var/log/nuon-runner-mng/*.log",
             "log_group_name": "runner-$RUNNER_ID",
             "log_stream_name": "nuon-runner-mng-{date}",
-            "timezone": "UTC"
+            "timezone": "UTC",
+            "from_beginning": true
           }
         ]
       }
