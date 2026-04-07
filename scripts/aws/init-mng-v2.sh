@@ -89,6 +89,8 @@ get_tag() {
 }
 
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
+RUNNER_ID=$(get_tag "nuon_runner_id")
+RUNNER_AUTH_METHOD=$(get_tag "nuon_runner_auth_method")
 
 #
 # install runner binary (tag: latest always)
@@ -106,7 +108,7 @@ rm /tmp/install-runner.sh
 chown -R runner:runner /opt/nuon/runner
 
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
-while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" ./opt/nuon/runner/bin/runner mng fetch-token; do
+while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" RUNNER_ID="$RUNNER_ID" RUNNER_AUTH_METHOD="$RUNNER_AUTH_METHOD" ./opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
 done
@@ -115,9 +117,6 @@ done
 #
 # gather more facts
 #
-
-RUNNER_ID=$(get_tag "nuon_runner_id")
-RUNNER_AUTH_METHOD=$(get_tag "nuon_runner_auth_method")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 # gather facts for container image
