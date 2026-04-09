@@ -108,6 +108,7 @@ rm /tmp/install-runner.sh
 chown -R runner:runner /opt/nuon/runner
 
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
+echo "running mng fetch-token with RUNNER_API_URL=$RUNNER_API_URL RUNNER_ID=$RUNNER_ID RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD"
 while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" RUNNER_ID="$RUNNER_ID" RUNNER_AUTH_METHOD="$RUNNER_AUTH_METHOD" ./opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
