@@ -86,23 +86,28 @@ get_tag() {
 
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 
+# env var: defaults but over-written by env_vars block in runner.toml
+RUNNER_ID=$(get_tag "nuon_runner_id")
+RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-sts}"
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-latest}"
+
+
 #
 # install runner binary (tag: latest always)
 #
-
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-yes | /tmp/install-runner.sh latest /opt/nuon/runner/bin
+yes | /tmp/install-runner.sh $RUNNER_BINARY_VERSION /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
 # change ownership - ensure user runner can execute the runner binary
 #
-
 chown -R runner:runner /opt/nuon/runner
 
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
-while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" ./opt/nuon/runner/bin/runner mng fetch-token; do
+echo "running mng fetch-token with RUNNER_API_URL=$RUNNER_API_URL RUNNER_ID=$RUNNER_ID RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD"
+while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" RUNNER_ID="$RUNNER_ID" RUNNER_AUTH_METHOD="$RUNNER_AUTH_METHOD" ./opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
 done
@@ -111,8 +116,6 @@ done
 #
 # gather more facts
 #
-
-RUNNER_ID=$(get_tag "nuon_runner_id")
 AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
 # gather facts for container image
@@ -130,6 +133,7 @@ CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"
 cat << EOF > /opt/nuon/runner/env
 RUNNER_ID=$RUNNER_ID
 RUNNER_API_URL=$RUNNER_API_URL
+RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD
 AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
 EOF
