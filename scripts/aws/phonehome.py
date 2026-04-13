@@ -30,6 +30,7 @@ def lambda_handler(event, context):
                 "POST",
                 url,
                 body=encoded_data,
+                timeout=5,
                 headers={"Content-Type": "application/json"},
             )
             if 200 <= response.status < 300:
