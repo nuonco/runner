@@ -96,9 +96,9 @@ RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-latest}"
 # Determine Runner Binary Version
 #
 echo "determining runner binary version"
-echo " > $RUNNER_API_URL/v1/runner/$RUNNER_ID/public-settings"
+echo " > $RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings"
 for i in $(seq 1 30); do
-  runner_binary_version=$(curl -s "$RUNNER_API_URL/v1/runner/$RUNNER_ID/public-settings" | jq -r '.binary_version')
+  runner_binary_version=$(curl -s "$RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings" | jq -r '.binary_version')
   if [ -n "$runner_binary_version" ] && [ "$runner_binary_version" != "null" ]; then
     RUNNER_BINARY_VERSION="$runner_binary_version"
     echo "determined runner binary version: $RUNNER_BINARY_VERSION"
