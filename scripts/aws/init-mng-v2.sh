@@ -11,7 +11,7 @@
 # once we have confirmed the runner mng service is healthy. nohup + disown
 # ensure the timer survives cloud-init script cleanup.
 #
-nohup bash -c 'sleep 420; /sbin/shutdown -h now "nuon-runner-mng userdata 7m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+nohup bash -c 'sleep 300; /sbin/shutdown -h now "nuon-runner-mng userdata 7m hard deadline expired"' </dev/null >/dev/null 2>&1 &
 SHUTDOWN_PID=$!
 disown "$SHUTDOWN_PID" 2>/dev/null || true
 echo "scheduled hard-deadline shutdown in 7m with pid=$SHUTDOWN_PID"
