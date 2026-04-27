@@ -1,6 +1,22 @@
 #!/bin/bash
 
 #
+# schedule a hard-deadline shutdown FIRST, before any other commands run.
+#
+# this is a safety net: if any command in this script fails, hangs, or loops
+# indefinitely (e.g. yum install, ec2-metadata, fetch-token retry loop), the
+# vm will still be shut down and the ASG will replace it with a fresh one.
+#
+# we save the pid so we can cancel this shutdown at the end of the script
+# once we have confirmed the runner mng service is healthy. nohup + disown
+# ensure the timer survives cloud-init script cleanup.
+#
+nohup bash -c 'sleep 420; /sbin/shutdown -h now "nuon-runner-mng userdata 7m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+SHUTDOWN_PID=$!
+disown "$SHUTDOWN_PID" 2>/dev/null || true
+echo "scheduled hard-deadline shutdown in 7m with pid=$SHUTDOWN_PID"
+
+#
 # install dependencies
 #
 
@@ -227,3 +243,29 @@ systemctl start nuon-runner-mng
 # re-start cloudwatch agent so our config is picked up
 #
 systemctl restart amazon-cloudwatch-agent
+
+#
+# poll nuon-runner-mng health every 15s. if it becomes healthy, cancel the
+# hard-deadline shutdown scheduled at the top of this script. if it does not
+# become healthy, let the 7m timer fire and let the ASG replace this vm.
+#
+# we poll for up to 5min here. combined with the time the rest of the script
+# took to run, this stays comfortably within the 7m hard deadline budget.
+#
+HEALTHY=false
+for i in $(seq 1 20); do
+    if systemctl is-active --quiet nuon-runner-mng; then
+        echo "nuon-runner-mng is healthy (attempt $i/20)"
+        HEALTHY=true
+        break
+    fi
+    echo "nuon-runner-mng not healthy yet, retrying in 15s ($i/20)"
+    sleep 15
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "cancelling hard-deadline shutdown (pid=$SHUTDOWN_PID)"
+    kill "$SHUTDOWN_PID" 2>/dev/null || true
+else
+    echo "nuon-runner-mng failed to become healthy, leaving 7m hard-deadline shutdown in place"
+fi
