@@ -1,0 +1,76 @@
+name: release-scripts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/aws/**'
+      - 'scripts/azure/**'
+      - 'scripts/gcp/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-scripts
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed cloud dirs
+        id: detect
+        run: |
+          set -euo pipefail
+          before='${{ github.event.before }}'
+          if [ "$before" = "0000000000000000000000000000000000000000" ] || [ -z "$before" ]; then
+            base="${{ github.sha }}^"
+          else
+            base="$before"
+          fi
+          git diff --name-only "$base" "${{ github.sha }}" -- 'scripts/' \
+            | awk -F/ 'NF>=3 && $1=="scripts" && ($2=="aws" || $2=="azure" || $2=="gcp") {print $2}' \
+            | sort -u > /tmp/clouds.txt
+          echo "Changed cloud dirs:"
+          cat /tmp/clouds.txt || true
+
+      - name: Release each changed cloud
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ ! -s /tmp/clouds.txt ]; then
+            echo "No cloud dirs changed; nothing to release."
+            exit 0
+          fi
+          while IFS= read -r cloud; do
+            [ -z "$cloud" ] && continue
+            dir="scripts/$cloud"
+            mapfile -t files < <(find "$dir" -maxdepth 1 -type f -not -name '.*' | sort)
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "Skipping $cloud — no files in $dir"
+              continue
+            fi
+
+            latest=$(git tag -l "${cloud}-v*" --sort=-v:refname | head -n1)
+            if [ -z "$latest" ]; then
+              new="${cloud}-v0.1.0"
+            else
+              ver="${latest#${cloud}-v}"
+              IFS='.' read -r maj min patch <<< "$ver"
+              patch=$((patch + 1))
+              new="${cloud}-v${maj}.${min}.${patch}"
+            fi
+
+            echo "Creating release $new with ${#files[@]} file(s) from $dir"
+            gh release create "$new" \
+              --target "${{ github.sha }}" \
+              --title "$new" \
+              --generate-notes \
+              "${files[@]}"
+          done < /tmp/clouds.txt
