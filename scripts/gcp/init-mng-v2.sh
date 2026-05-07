@@ -1,6 +1,11 @@
 #!/bin/bash
 
 #
+# Nuon Runner Init Script
+# Runs on a VM on GCP
+#
+
+#
 # install dependencies
 # NOTE: Ubuntu 24.04+ required for polkit JS rules support
 #

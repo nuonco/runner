@@ -1,6 +1,11 @@
 #!/bin/bash
 
 #
+# Nuon Runner Init Script
+# Runs on RunnerASG-managed VMs on AWS
+#
+
+#
 # schedule a hard-deadline shutdown FIRST, before any other commands run.
 #
 # this is a safety net: if any command in this script fails, hangs, or loops
