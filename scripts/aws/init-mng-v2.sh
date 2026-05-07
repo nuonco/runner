@@ -1,6 +1,22 @@
 #!/bin/bash
 
 #
+# schedule a hard-deadline shutdown FIRST, before any other commands run.
+#
+# this is a safety net: if any command in this script fails, hangs, or loops
+# indefinitely (e.g. yum install, ec2-metadata, fetch-token retry loop), the
+# vm will still be shut down and the ASG will replace it with a fresh one.
+#
+# we save the pid so we can cancel this shutdown at the end of the script
+# once we have confirmed the runner mng service is healthy. nohup + disown
+# ensure the timer survives cloud-init script cleanup.
+#
+nohup bash -c 'sleep 300; /sbin/shutdown -h now "nuon-runner-mng userdata 5m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+SHUTDOWN_PID=$!
+disown "$SHUTDOWN_PID" 2>/dev/null || true
+echo "scheduled hard-deadline shutdown in 5m with pid=$SHUTDOWN_PID"
+
+#
 # install dependencies
 #
 
@@ -227,3 +243,58 @@ systemctl start nuon-runner-mng
 # re-start cloudwatch agent so our config is picked up
 #
 systemctl restart amazon-cloudwatch-agent
+
+#
+# poll nuon-runner-mng health every 15s. a single "is-active" check is not
+# enough because the unit has Restart=always, so it can look "active"
+# momentarily between crashes in a restart loop. to confirm the service is
+# actually stable we require:
+#   - ActiveState=active and SubState=running
+#   - the current run has been up for at least MIN_UPTIME_SEC seconds
+#     (ActiveEnterTimestamp resets on every restart, so a crash loop will
+#     never accumulate enough uptime to pass this check)
+#   - REQUIRED_CONSECUTIVE consecutive samples meet the above
+#
+# if the service stabilizes, cancel the hard-deadline shutdown. otherwise,
+# let the timer fire and let the ASG replace this vm.
+#
+HEALTHY=false
+CONSECUTIVE_HEALTHY=0
+REQUIRED_CONSECUTIVE=3
+MIN_UPTIME_SEC=60
+
+for i in $(seq 1 20); do
+    ACTIVE_STATE=$(systemctl show nuon-runner-mng --property=ActiveState --value)
+    SUB_STATE=$(systemctl show nuon-runner-mng --property=SubState --value)
+    N_RESTARTS=$(systemctl show nuon-runner-mng --property=NRestarts --value)
+    ACTIVE_ENTER=$(systemctl show nuon-runner-mng --property=ActiveEnterTimestamp --value)
+
+    UPTIME_SEC=0
+    if [ -n "$ACTIVE_ENTER" ]; then
+        ACTIVE_ENTER_EPOCH=$(date -d "$ACTIVE_ENTER" +%s 2>/dev/null || echo 0)
+        if [ "$ACTIVE_ENTER_EPOCH" -gt 0 ]; then
+            UPTIME_SEC=$(( $(date +%s) - ACTIVE_ENTER_EPOCH ))
+        fi
+    fi
+
+    if [ "$ACTIVE_STATE" = "active" ] && [ "$SUB_STATE" = "running" ] && [ "$UPTIME_SEC" -ge "$MIN_UPTIME_SEC" ]; then
+        CONSECUTIVE_HEALTHY=$((CONSECUTIVE_HEALTHY + 1))
+        echo "nuon-runner-mng stable ($CONSECUTIVE_HEALTHY/$REQUIRED_CONSECUTIVE consecutive): uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+        if [ "$CONSECUTIVE_HEALTHY" -ge "$REQUIRED_CONSECUTIVE" ]; then
+            HEALTHY=true
+            break
+        fi
+    else
+        CONSECUTIVE_HEALTHY=0
+        echo "nuon-runner-mng not stable: state=$ACTIVE_STATE/$SUB_STATE uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+    fi
+
+    sleep 15
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "cancelling hard-deadline shutdown (pid=$SHUTDOWN_PID)"
+    kill "$SHUTDOWN_PID" 2>/dev/null || true
+else
+    echo "nuon-runner-mng failed to stabilize, leaving hard-deadline shutdown in place"
+fi
