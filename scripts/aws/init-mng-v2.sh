@@ -110,7 +110,11 @@ RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 # env var: defaults but over-written by env_vars block in runner.toml
 RUNNER_ID=$(get_tag "nuon_runner_id")
 RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-sts}"
-RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-latest}"
+
+# the runner binary version should never fall back to latest.
+# if no value is provided (via runner.toml) leave it empty
+# attempt to retreive from URL and shut down if that fails.
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-}"
 
 
 #
@@ -128,6 +132,12 @@ for i in $(seq 1 30); do
   echo "attempt $i/30: failed to determine runner binary version, retrying in 2s"
   sleep 2
 done
+
+if [ -z "$RUNNER_BINARY_VERSION" ]; then
+  echo "No runner binary version provided and could not determined from Nuon Runner API - shutting down"
+  /sbin/shutdown -h now "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
+  exit 1
+fi
 
 #
 # install runner binary (tag: latest always)
