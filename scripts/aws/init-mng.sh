@@ -140,7 +140,7 @@ if [ -z "$RUNNER_BINARY_VERSION" ]; then
 fi
 
 #
-# install runner binary (tag: latest always)
+# install runner binary (tag: RUNNER_BINARY_VERSION)
 #
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
@@ -183,6 +183,7 @@ RUNNER_API_URL=$RUNNER_API_URL
 RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD
 AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
+GIT_REF=$CONTAINER_IMAGE_URL
 EOF
 
 cat << EOF > /opt/nuon/runner/image
@@ -244,7 +245,6 @@ User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 EnvironmentFile=/opt/nuon/runner/token
-Environment="GIT_REF=latest"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
