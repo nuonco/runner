@@ -110,7 +110,11 @@ RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 # env var: defaults but over-written by env_vars block in runner.toml
 RUNNER_ID=$(get_tag "nuon_runner_id")
 RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-sts}"
-RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-latest}"
+
+# the runner binary version should never fall back to latest.
+# if no value is provided (via runner.toml) leave it empty
+# attempt to retreive from URL and shut down if that fails.
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-}"
 
 
 #
@@ -129,8 +133,14 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
+if [ -z "$RUNNER_BINARY_VERSION" ]; then
+  echo "No runner binary version provided and could not determined from Nuon Runner API - shutting down"
+  /sbin/shutdown -h now "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
+  exit 1
+fi
+
 #
-# install runner binary (tag: latest always)
+# install runner binary (tag: RUNNER_BINARY_VERSION)
 #
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
@@ -173,6 +183,7 @@ RUNNER_API_URL=$RUNNER_API_URL
 RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD
 AWS_REGION=$AWS_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
+GIT_REF=$CONTAINER_IMAGE_URL
 EOF
 
 cat << EOF > /opt/nuon/runner/image
@@ -234,7 +245,6 @@ User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 EnvironmentFile=/opt/nuon/runner/token
-Environment="GIT_REF=latest"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
 RestartSec=3
