@@ -109,7 +109,7 @@ RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
 
 # env var: defaults but over-written by env_vars block in runner.toml
 RUNNER_ID=$(get_tag "nuon_runner_id")
-RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-sts}"
+RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-iid}"
 
 # the runner binary version should never fall back to latest.
 # if no value is provided (via runner.toml) leave it empty

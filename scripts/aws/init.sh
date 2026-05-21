@@ -1,4 +1,99 @@
-#!bin/bash
+#!/bin/bash
+
+#
+# Nuon Runner Init Script
+# Runs on RunnerASG-managed VMs on AWS
+#
+
+#
+# schedule a hard-deadline shutdown FIRST, before any other commands run.
+#
+# this is a safety net: if any command in this script fails, hangs, or loops
+# indefinitely (e.g. yum install, ec2-metadata, fetch-token retry loop), the
+# vm will still be shut down and the ASG will replace it with a fresh one.
+#
+# we save the pid so we can cancel this shutdown at the end of the script
+# once we have confirmed the runner mng service is healthy. nohup + disown
+# ensure the timer survives cloud-init script cleanup.
+#
+nohup bash -c 'sleep 300; /sbin/shutdown -h now "nuon-runner-mng userdata 5m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+SHUTDOWN_PID=$!
+disown "$SHUTDOWN_PID" 2>/dev/null || true
+echo "scheduled hard-deadline shutdown in 5m with pid=$SHUTDOWN_PID"
+
+#
+# install dependencies
+#
+
+yum install -y docker amazon-cloudwatch-agent polkit
+systemctl enable --now docker
+
+#
+# set up user, home directory, and subdirs for the runner
+#
+
+useradd runner -G docker -c "" -d /opt/nuon/runner
+usermod -a -G root runner # TODO(fd): root?
+mkdir -p /opt/nuon/runner/bin
+
+#
+# commands which we want to be able to run w/ passwordless sudo
+# - fallback for shutdown
+#
+
+cat << EOF > /etc/sudoers.d/runner
+runner ALL= NOPASSWD: `which shutdown` -h now
+EOF
+
+#
+# grant group:runner permission to manage the nuon-runner.service via systemd
+#
+
+cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("runner")) {
+        return polkit.Result.YES;
+    }
+});
+
+polkit.addRule(function(action, subject) {
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "nuon-runner.service" &&
+        subject.isInGroup("runner")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+#
+# grant group:runner permission to shutdown and reboot the VM
+#
+
+cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
+polkit.addRule(function(action, subject) {
+    if (
+      (
+        action.id.includes("org.freedesktop.login1.power")      ||
+        action.id.includes("org.freedesktop.login1.reboot")     ||
+        action.id.includes("org.freedesktop.login1.set-reboot-")
+      ) && subject.isInGroup("runner")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+#
+# restart polkit so policies take effect
+#
+
+systemctl restart polkit.service
+
+#
+# gather some facts
+#
 
 get_tag() {
     local tag_name=$1
@@ -10,90 +105,227 @@ get_tag() {
         --output text
 }
 
-RUNNER_ID=$(get_tag "nuon_runner_id")
-RUNNER_API_TOKEN=$(get_tag "nuon_runner_api_token")
 RUNNER_API_URL=$(get_tag "nuon_runner_api_url")
-AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
-yum install -y docker amazon-cloudwatch-agent
-systemctl enable --now docker
+# env var: defaults but over-written by env_vars block in runner.toml
+RUNNER_ID=$(get_tag "nuon_runner_id")
+RUNNER_AUTH_METHOD="${RUNNER_AUTH_METHOD:-iid}"
 
-# Set up things for the runner
-useradd runner -G docker -c "" -d /opt/nuon/runner
+# the runner binary version should never fall back to latest.
+# if no value is provided (via runner.toml) leave it empty
+# attempt to retreive from URL and shut down if that fails.
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-}"
+
+
+#
+# Determine Runner Binary Version
+#
+echo "determining runner binary version"
+echo " > $RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings"
+for i in $(seq 1 30); do
+  runner_binary_version=$(curl -s "$RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings" | jq -r '.binary_version')
+  if [ -n "$runner_binary_version" ] && [ "$runner_binary_version" != "null" ]; then
+    RUNNER_BINARY_VERSION="$runner_binary_version"
+    echo "determined runner binary version: $RUNNER_BINARY_VERSION"
+    break
+  fi
+  echo "attempt $i/30: failed to determine runner binary version, retrying in 2s"
+  sleep 2
+done
+
+if [ -z "$RUNNER_BINARY_VERSION" ]; then
+  echo "No runner binary version provided and could not determined from Nuon Runner API - shutting down"
+  /sbin/shutdown -h now "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
+  exit 1
+fi
+
+#
+# install runner binary (tag: RUNNER_BINARY_VERSION)
+#
+curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
+chmod +x /tmp/install-runner.sh
+yes | /tmp/install-runner.sh $RUNNER_BINARY_VERSION /opt/nuon/runner/bin
+rm /tmp/install-runner.sh
+
+#
+# change ownership - ensure user runner can execute the runner binary
+#
 chown -R runner:runner /opt/nuon/runner
 
-cat << EOF > /opt/nuon/runner/env
-RUNNER_ID=$RUNNER_ID
-RUNNER_API_TOKEN=$RUNNER_API_TOKEN
-RUNNER_API_URL=$RUNNER_API_URL
-AWS_REGION=$AWS_REGION
-# FIXME(sdboyer) this hack must be fixed - userdata is only run on instance creation, and ip can change on each boot
-HOST_IP=$(curl -s https://checkip.amazonaws.com)
-EOF
+# run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
+echo "running mng fetch-token with RUNNER_API_URL=$RUNNER_API_URL RUNNER_ID=$RUNNER_ID RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD"
+while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" RUNNER_ID="$RUNNER_ID" RUNNER_AUTH_METHOD="$RUNNER_AUTH_METHOD" ./opt/nuon/runner/bin/runner mng fetch-token; do
+  echo "mng fetch-token failed, retrying in 15s"
+  sleep 15
+done
 
 
-# this ⤵ is wrapped w/ single quotes to prevent variable expansion.
-cat << 'EOF' > /opt/nuon/runner/get_image_tag.sh
-#!/bin/sh
+#
+# gather more facts
+#
+AWS_REGION=$(ec2-metadata -R | awk '{ print $2 }')
 
-set -u
-
-# source this file to get some env vars
-source /opt/nuon/runner/env
-
-# Fetch runner settings from the API
-echo "Fetching runner settings from $RUNNER_API_URL/v1/runners/$RUNNER_ID/settings"
+# gather facts for container image
+RUNNER_API_TOKEN=$(cat /opt/nuon/runner/token | cut -d '=' -f 2)
 RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_API_URL/v1/runners/$RUNNER_ID/settings")
-
-# Extract container image URL and tag from the response
 CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
 
-# echo into a file for easier retrieval; re-create the file to avoid duplicate values.
-rm -f /opt/nuon/runner/image
-echo "CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL" >> /opt/nuon/runner/image
-echo "CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG" >> /opt/nuon/runner/image
+#
+# create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
+#
 
-# export so we can get these values by sourcing this file
-export CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
-export CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
-
-echo "Using container image: $CONTAINER_IMAGE_URL:$CONTAINER_IMAGE_TAG"
+# NOTE: HOST_IP: userdata is only run on instance creation, and ip can change on each boot. we set it "up front" here.
+# in all likelihood, the runner vm will have restarted if the ip has changed.
+cat << EOF > /opt/nuon/runner/env
+RUNNER_ID=$RUNNER_ID
+RUNNER_API_URL=$RUNNER_API_URL
+RUNNER_AUTH_METHOD=$RUNNER_AUTH_METHOD
+AWS_REGION=$AWS_REGION
+HOST_IP=$(curl -s https://checkip.amazonaws.com)
+GIT_REF=$CONTAINER_IMAGE_URL
 EOF
 
-sh /opt/nuon/runner/get_image_tag.sh
+cat << EOF > /opt/nuon/runner/image
+CONTAINER_IMAGE_URL=$CONTAINER_IMAGE_URL
+CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
+EOF
 
+# grant the runner ownership over the files here
+chown -R runner:runner /opt/nuon/runner
 
-# Create systemd unit file for runner
-cat << 'EOF' > /etc/systemd/system/nuon-runner.service
+#
+# create directory for logs
+# TODO(fd): send logs to cloudwatch
+#
+
+mkdir /var/log/nuon-runner-mng
+
+#
+# configure cloudwatch
+#
+cat << EOF > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+{
+  "agent": {
+    "region": "$AWS_REGION",
+    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/nuon-runner-mng/*.log",
+            "log_group_name": "runner-$RUNNER_ID",
+            "log_stream_name": "nuon-runner-mng-{date}",
+            "timezone": "UTC"
+          }
+        ]
+      }
+    },
+    "log_stream_name": "nuon-runner-mng",
+    "force_flush_interval": 10
+  }
+}
+EOF
+
+#
+# Create systemd unit file for "runner mng" process
+#
+
+cat << 'EOF' > /etc/systemd/system/nuon-runner-mng.service
 [Unit]
-Description=Nuon Runner Service
-After=docker.service
-Requires=docker.service
+Description=Nuon Runner Mng Service
 
 [Service]
 TimeoutStartSec=0
+StandardOutput=file:/var/log/nuon-runner-mng/logs.log
+StandardError=file:/var/log/nuon-runner-mng/errors.log
 User=runner
-ExecStartPre=-/bin/sh -c "/usr/bin/docker stop $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
-ExecStartPre=-/bin/sh -c "/usr/bin/docker rm   $(/usr/bin/docker ps -a -q --filter=\"name=%n\")"
-ExecStartPre=-/bin/sh /opt/nuon/runner/get_image_tag.sh
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
-ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG}
-ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750g" --cpus="1.75" --env-file /opt/nuon/runner/env --log-driver=awslogs --log-opt awslogs-region=${AWS_REGION} --log-opt awslogs-group=runner-${RUNNER_ID} ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG} run
-ExecStopPost=-/bin/sh -c "rm -rf /tmp/nuon-runner/*"
-ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q)"
-ExecStopPost=-/bin/sh -c "yes | /usr/bin/docker system prune"
+EnvironmentFile=/opt/nuon/runner/token
+ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
-RestartSec=5
-StartLimitIntervalSec=0
+RestartSec=3
 
 [Install]
 WantedBy=default.target
 EOF
 
 
+#
+# create the nuon-runner.service file and change owner to runner:runner
+#
+
+touch /etc/systemd/system/nuon-runner.service
+chown runner:runner /etc/systemd/system/nuon-runner.service
+
+#
 # Just in case SELinux might be unhappy
-/sbin/restorecon -v /etc/systemd/system/nuon-runner.service
+#
+
+/sbin/restorecon -v /etc/systemd/system/nuon-runner-mng.service
 systemctl daemon-reload
-systemctl enable --now nuon-runner
+systemctl enable nuon-runner-mng
+systemctl start nuon-runner-mng
+
+#
+# re-start cloudwatch agent so our config is picked up
+#
+systemctl restart amazon-cloudwatch-agent
+
+#
+# poll nuon-runner-mng health every 15s. a single "is-active" check is not
+# enough because the unit has Restart=always, so it can look "active"
+# momentarily between crashes in a restart loop. to confirm the service is
+# actually stable we require:
+#   - ActiveState=active and SubState=running
+#   - the current run has been up for at least MIN_UPTIME_SEC seconds
+#     (ActiveEnterTimestamp resets on every restart, so a crash loop will
+#     never accumulate enough uptime to pass this check)
+#   - REQUIRED_CONSECUTIVE consecutive samples meet the above
+#
+# if the service stabilizes, cancel the hard-deadline shutdown. otherwise,
+# let the timer fire and let the ASG replace this vm.
+#
+HEALTHY=false
+CONSECUTIVE_HEALTHY=0
+REQUIRED_CONSECUTIVE=3
+MIN_UPTIME_SEC=60
+
+for i in $(seq 1 20); do
+    ACTIVE_STATE=$(systemctl show nuon-runner-mng --property=ActiveState --value)
+    SUB_STATE=$(systemctl show nuon-runner-mng --property=SubState --value)
+    N_RESTARTS=$(systemctl show nuon-runner-mng --property=NRestarts --value)
+    ACTIVE_ENTER=$(systemctl show nuon-runner-mng --property=ActiveEnterTimestamp --value)
+
+    UPTIME_SEC=0
+    if [ -n "$ACTIVE_ENTER" ]; then
+        ACTIVE_ENTER_EPOCH=$(date -d "$ACTIVE_ENTER" +%s 2>/dev/null || echo 0)
+        if [ "$ACTIVE_ENTER_EPOCH" -gt 0 ]; then
+            UPTIME_SEC=$(( $(date +%s) - ACTIVE_ENTER_EPOCH ))
+        fi
+    fi
+
+    if [ "$ACTIVE_STATE" = "active" ] && [ "$SUB_STATE" = "running" ] && [ "$UPTIME_SEC" -ge "$MIN_UPTIME_SEC" ]; then
+        CONSECUTIVE_HEALTHY=$((CONSECUTIVE_HEALTHY + 1))
+        echo "nuon-runner-mng stable ($CONSECUTIVE_HEALTHY/$REQUIRED_CONSECUTIVE consecutive): uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+        if [ "$CONSECUTIVE_HEALTHY" -ge "$REQUIRED_CONSECUTIVE" ]; then
+            HEALTHY=true
+            break
+        fi
+    else
+        CONSECUTIVE_HEALTHY=0
+        echo "nuon-runner-mng not stable: state=$ACTIVE_STATE/$SUB_STATE uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+    fi
+
+    sleep 15
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "cancelling hard-deadline shutdown (pid=$SHUTDOWN_PID)"
+    kill "$SHUTDOWN_PID" 2>/dev/null || true
+else
+    echo "nuon-runner-mng failed to stabilize, leaving hard-deadline shutdown in place"
+fi
