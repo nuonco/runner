@@ -28,12 +28,23 @@ useradd runner -G docker -c "" -d /opt/nuon/runner || true
 mkdir -p /opt/nuon/runner
 chown -R runner:runner /opt/nuon/runner
 
+# Size container from VM resources, leaving 1Gi host headroom (avoids OOM/page-cache thrash on builds)
+MEM_TOTAL_MB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+if [ "$MEM_TOTAL_MB" -gt 3072 ]; then
+  RUNNER_MEMORY="$((MEM_TOTAL_MB - 1024))m"
+else
+  RUNNER_MEMORY="$((MEM_TOTAL_MB * 80 / 100))m"
+fi
+RUNNER_CPUS=$(nproc)
+
 cat << EOF > /opt/nuon/runner/env
 RUNNER_ID=$RUNNER_ID
 RUNNER_API_TOKEN=$RUNNER_API_TOKEN
 RUNNER_API_URL=$RUNNER_API_URL
 GCP_REGION=$GCP_REGION
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
+RUNNER_MEMORY=$RUNNER_MEMORY
+RUNNER_CPUS=$RUNNER_CPUS
 EOF
 
 cat << 'EOF' > /opt/nuon/runner/get_image_tag.sh
@@ -75,7 +86,7 @@ ExecStartPre=-/bin/bash /opt/nuon/runner/get_image_tag.sh
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 ExecStartPre=/usr/bin/docker pull ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG}
-ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "3750m" --cpus="1.75" --env-file /opt/nuon/runner/env ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG} run
+ExecStart=/usr/bin/docker run -v /tmp/nuon-runner:/tmp --rm --name %n -p 5000:5000 --memory "${RUNNER_MEMORY}" --cpus="${RUNNER_CPUS}" --env-file /opt/nuon/runner/env ${CONTAINER_IMAGE_URL}:${CONTAINER_IMAGE_TAG} run
 ExecStopPost=-/bin/sh -c "rm -rf /tmp/nuon-runner/*"
 ExecStopPost=-/bin/sh -c "/usr/bin/docker rmi  $(/usr/bin/docker images -a -q)"
 ExecStopPost=-/bin/sh -c "yes | /usr/bin/docker system prune"
