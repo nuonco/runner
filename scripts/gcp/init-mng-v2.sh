@@ -127,12 +127,23 @@ CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"
 # create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
 #
 
+# Size container from VM resources, leaving 1Gi host headroom (avoids OOM/page-cache thrash on builds)
+MEM_TOTAL_MB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+if [ "$MEM_TOTAL_MB" -gt 3072 ]; then
+  RUNNER_MEMORY="$((MEM_TOTAL_MB - 1024))m"
+else
+  RUNNER_MEMORY="$((MEM_TOTAL_MB * 80 / 100))m"
+fi
+RUNNER_CPUS=$(nproc)
+
 cat << EOF > /opt/nuon/runner/env
 RUNNER_ID=$RUNNER_ID
 RUNNER_API_URL=$RUNNER_API_URL
 GCP_REGION=$GCP_REGION
 CLOUD_PROVIDER=gcp
 HOST_IP=$(curl -s https://checkip.amazonaws.com)
+RUNNER_MEMORY=$RUNNER_MEMORY
+RUNNER_CPUS=$RUNNER_CPUS
 EOF
 
 cat << EOF > /opt/nuon/runner/image
