@@ -6,12 +6,30 @@
 #
 
 #
+# schedule a hard-deadline shutdown FIRST, before any other commands run.
+#
+# this is a safety net: if any command in this script fails, hangs, or loops
+# indefinitely (e.g. apt install, metadata fetch, fetch-token retry loop), the
+# vm will still be shut down. the MIG (targetSize maintenance, no autohealing)
+# recreates a TERMINATED instance to maintain its target size, replacing this
+# vm with a fresh one.
+#
+# we save the pid so we can cancel this shutdown at the end of the script
+# once we have confirmed the runner mng service is healthy. nohup + disown
+# ensure the timer survives cloud-init script cleanup.
+#
+nohup bash -c 'sleep 300; /sbin/shutdown -h now "nuon-runner-mng userdata 5m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+SHUTDOWN_PID=$!
+disown "$SHUTDOWN_PID" 2>/dev/null || true
+echo "scheduled hard-deadline shutdown in 5m with pid=$SHUTDOWN_PID"
+
+#
 # install dependencies
 # NOTE: Ubuntu 24.04+ required for polkit JS rules support
 #
 
 apt-get update -y
-apt-get install -y docker.io policykit-1
+apt-get install -y docker.io policykit-1 jq
 systemctl enable --now docker
 
 #
@@ -88,14 +106,42 @@ get_metadata() {
 }
 
 RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
+RUNNER_ID=${NUON_RUNNER_ID:-$(get_metadata "nuon_runner_id")}
+
+# the runner binary version should never fall back to latest.
+# if no value is provided (via metadata/env) leave it empty,
+# attempt to retrieve from the API, and shut down if that fails.
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-}"
 
 #
-# install runner binary (tag: latest always)
+# Determine Runner Binary Version
+#
+echo "determining runner binary version"
+echo " > $RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings"
+for i in $(seq 1 30); do
+  runner_binary_version=$(curl -s "$RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings" | jq -r '.binary_version')
+  if [ -n "$runner_binary_version" ] && [ "$runner_binary_version" != "null" ]; then
+    RUNNER_BINARY_VERSION="$runner_binary_version"
+    echo "determined runner binary version: $RUNNER_BINARY_VERSION"
+    break
+  fi
+  echo "attempt $i/30: failed to determine runner binary version, retrying in 2s"
+  sleep 2
+done
+
+if [ -z "$RUNNER_BINARY_VERSION" ]; then
+  echo "No runner binary version provided and could not determine from Nuon Runner API - shutting down"
+  /sbin/shutdown -h now "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
+  exit 1
+fi
+
+#
+# install runner binary (tag: RUNNER_BINARY_VERSION)
 #
 
 curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh > /tmp/install-runner.sh
 chmod +x /tmp/install-runner.sh
-/tmp/install-runner.sh --no-input latest /opt/nuon/runner/bin
+/tmp/install-runner.sh --no-input "$RUNNER_BINARY_VERSION" /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
 
 #
@@ -114,7 +160,6 @@ done
 # gather more facts
 #
 
-RUNNER_ID=${NUON_RUNNER_ID:-$(get_metadata "nuon_runner_id")}
 GCP_REGION=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}' | sed 's/-[a-z]$//')
 
 # gather facts for container image
@@ -199,3 +244,58 @@ chown runner:runner /etc/systemd/system/nuon-runner.service
 systemctl daemon-reload
 systemctl enable nuon-runner-mng
 systemctl start nuon-runner-mng
+
+#
+# poll nuon-runner-mng health every 15s. a single "is-active" check is not
+# enough because the unit has Restart=always, so it can look "active"
+# momentarily between crashes in a restart loop. to confirm the service is
+# actually stable we require:
+#   - ActiveState=active and SubState=running
+#   - the current run has been up for at least MIN_UPTIME_SEC seconds
+#     (ActiveEnterTimestamp resets on every restart, so a crash loop will
+#     never accumulate enough uptime to pass this check)
+#   - REQUIRED_CONSECUTIVE consecutive samples meet the above
+#
+# if the service stabilizes, cancel the hard-deadline shutdown. otherwise,
+# let the timer fire and let the MIG replace this vm.
+#
+HEALTHY=false
+CONSECUTIVE_HEALTHY=0
+REQUIRED_CONSECUTIVE=3
+MIN_UPTIME_SEC=60
+
+for i in $(seq 1 20); do
+    ACTIVE_STATE=$(systemctl show nuon-runner-mng --property=ActiveState --value)
+    SUB_STATE=$(systemctl show nuon-runner-mng --property=SubState --value)
+    N_RESTARTS=$(systemctl show nuon-runner-mng --property=NRestarts --value)
+    ACTIVE_ENTER=$(systemctl show nuon-runner-mng --property=ActiveEnterTimestamp --value)
+
+    UPTIME_SEC=0
+    if [ -n "$ACTIVE_ENTER" ]; then
+        ACTIVE_ENTER_EPOCH=$(date -d "$ACTIVE_ENTER" +%s 2>/dev/null || echo 0)
+        if [ "$ACTIVE_ENTER_EPOCH" -gt 0 ]; then
+            UPTIME_SEC=$(( $(date +%s) - ACTIVE_ENTER_EPOCH ))
+        fi
+    fi
+
+    if [ "$ACTIVE_STATE" = "active" ] && [ "$SUB_STATE" = "running" ] && [ "$UPTIME_SEC" -ge "$MIN_UPTIME_SEC" ]; then
+        CONSECUTIVE_HEALTHY=$((CONSECUTIVE_HEALTHY + 1))
+        echo "nuon-runner-mng stable ($CONSECUTIVE_HEALTHY/$REQUIRED_CONSECUTIVE consecutive): uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+        if [ "$CONSECUTIVE_HEALTHY" -ge "$REQUIRED_CONSECUTIVE" ]; then
+            HEALTHY=true
+            break
+        fi
+    else
+        CONSECUTIVE_HEALTHY=0
+        echo "nuon-runner-mng not stable: state=$ACTIVE_STATE/$SUB_STATE uptime=${UPTIME_SEC}s restarts=$N_RESTARTS (attempt $i/20)"
+    fi
+
+    sleep 15
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "cancelling hard-deadline shutdown (pid=$SHUTDOWN_PID)"
+    kill "$SHUTDOWN_PID" 2>/dev/null || true
+else
+    echo "nuon-runner-mng failed to stabilize, leaving hard-deadline shutdown in place"
+fi
