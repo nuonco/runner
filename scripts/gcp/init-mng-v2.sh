@@ -106,7 +106,6 @@ get_metadata() {
 }
 
 RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
-BOOTSTRAP_API_URL="$RUNNER_API_URL"
 RUNNER_ID=${NUON_RUNNER_ID:-$(get_metadata "nuon_runner_id")}
 
 # the runner binary version should never fall back to latest.
@@ -134,6 +133,10 @@ RUNNER_BINARY_VERSION=$(echo "$PUBLIC_SETTINGS" | jq -r '.binary_version // empt
 echo "runner binary version: $RUNNER_BINARY_VERSION"
 
 runner_api_url=$(echo "$PUBLIC_SETTINGS" | jq -r '.runner_api_url // empty')
+if [ -n "$runner_api_url" ]; then
+  echo "setting RUNNER_API_URL from public settings: $runner_api_url"
+  RUNNER_API_URL="$runner_api_url"
+fi
 
 if [ -z "$RUNNER_BINARY_VERSION" ]; then
   echo "No runner binary version provided and could not determine from Nuon Runner API - shutting down"
@@ -156,17 +159,11 @@ rm /tmp/install-runner.sh
 
 chown -R runner:runner /opt/nuon/runner
 
-# run mng fetch-token using the bootstrap URL so the GCP identity token audience matches
-while ! sudo -u runner RUNNER_API_URL="$BOOTSTRAP_API_URL" CLOUD_PROVIDER=gcp /opt/nuon/runner/bin/runner mng fetch-token; do
+# run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
+while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" CLOUD_PROVIDER=gcp /opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
 done
-
-# apply the runner API URL override after auth — the runner process uses this for all ongoing calls
-if [ -n "$runner_api_url" ]; then
-  echo "setting RUNNER_API_URL from public settings: $runner_api_url"
-  RUNNER_API_URL="$runner_api_url"
-fi
 
 #
 # gather more facts
