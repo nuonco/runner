@@ -114,20 +114,29 @@ RUNNER_ID=${NUON_RUNNER_ID:-$(get_metadata "nuon_runner_id")}
 RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-}"
 
 #
-# Determine Runner Binary Version
+# Fetch public settings
 #
-echo "determining runner binary version"
+echo "fetching public settings"
 echo " > $RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings"
+PUBLIC_SETTINGS=""
 for i in $(seq 1 30); do
-  runner_binary_version=$(curl -s "$RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings" | jq -r '.binary_version')
-  if [ -n "$runner_binary_version" ] && [ "$runner_binary_version" != "null" ]; then
-    RUNNER_BINARY_VERSION="$runner_binary_version"
-    echo "determined runner binary version: $RUNNER_BINARY_VERSION"
+  PUBLIC_SETTINGS=$(curl -s "$RUNNER_API_URL/v1/runners/$RUNNER_ID/public-settings")
+  if [ -n "$PUBLIC_SETTINGS" ] && [ "$PUBLIC_SETTINGS" != "null" ]; then
+    echo "fetched public settings (attempt $i)"
     break
   fi
-  echo "attempt $i/30: failed to determine runner binary version, retrying in 2s"
+  echo "attempt $i/30: failed to fetch public settings, retrying in 2s"
   sleep 2
 done
+
+RUNNER_BINARY_VERSION=$(echo "$PUBLIC_SETTINGS" | jq -r '.binary_version // empty')
+echo "runner binary version: $RUNNER_BINARY_VERSION"
+
+runner_api_url=$(echo "$PUBLIC_SETTINGS" | jq -r '.runner_api_url // empty')
+if [ -n "$runner_api_url" ]; then
+  echo "setting RUNNER_API_URL from public settings: $runner_api_url"
+  RUNNER_API_URL="$runner_api_url"
+fi
 
 if [ -z "$RUNNER_BINARY_VERSION" ]; then
   echo "No runner binary version provided and could not determine from Nuon Runner API - shutting down"
