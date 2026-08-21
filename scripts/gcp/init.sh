@@ -6,22 +6,50 @@
 #
 
 #
-# schedule a hard-deadline shutdown FIRST, before any other commands run.
+# halt is unrecoverable when the runner is a bare instance and not a managed
+# group -- nothing recreates it. reboot instead, and only halt once retries
+# are exhausted. armed per phase so a slow package mirror cannot eat the
+# budget the runner needs to stabilize.
 #
-# this is a safety net: if any command in this script fails, hangs, or loops
-# indefinitely (e.g. apt install, metadata fetch, fetch-token retry loop), the
-# vm will still be shut down. the MIG (targetSize maintenance, no autohealing)
-# recreates a TERMINATED instance to maintain its target size, replacing this
-# vm with a fresh one.
-#
-# we save the pid so we can cancel this shutdown at the end of the script
-# once we have confirmed the runner mng service is healthy. nohup + disown
-# ensure the timer survives cloud-init script cleanup.
-#
-nohup bash -c 'sleep 900; /sbin/shutdown -h now "nuon-runner-mng userdata 15m hard deadline expired"' </dev/null >/dev/null 2>&1 &
-SHUTDOWN_PID=$!
-disown "$SHUTDOWN_PID" 2>/dev/null || true
-echo "scheduled hard-deadline shutdown in 15m with pid=$SHUTDOWN_PID"
+BOOTSTRAP_STATE=/var/lib/nuon-runner-bootstrap
+MAX_BOOTSTRAP_ATTEMPTS=3
+DEPS_PHASE_TIMEOUT=900
+RUNNER_PHASE_TIMEOUT=900
+
+# boot_id keys the counter to boots, not to userdata's in-boot retries.
+BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)
+BOOTSTRAP_ATTEMPTS=$(sed -n 1p "$BOOTSTRAP_STATE" 2>/dev/null || echo 0)
+if [ "$(sed -n 2p "$BOOTSTRAP_STATE" 2>/dev/null)" != "$BOOT_ID" ]; then
+  BOOTSTRAP_ATTEMPTS=$((BOOTSTRAP_ATTEMPTS + 1))
+  mkdir -p "$(dirname "$BOOTSTRAP_STATE")"
+  printf '%s\n%s\n' "$BOOTSTRAP_ATTEMPTS" "$BOOT_ID" > "$BOOTSTRAP_STATE"
+fi
+
+if [ "$BOOTSTRAP_ATTEMPTS" -gt "$MAX_BOOTSTRAP_ATTEMPTS" ]; then
+  DEADLINE_ACTION="/sbin/shutdown -h now"
+else
+  DEADLINE_ACTION="/sbin/reboot"
+fi
+
+DEADLINE_PID=""
+
+cancel_deadline() {
+  if [ -n "$DEADLINE_PID" ]; then
+    kill "$DEADLINE_PID" 2>/dev/null || true
+    DEADLINE_PID=""
+  fi
+}
+
+arm_deadline() {
+  local timeout=$1 phase=$2
+  cancel_deadline
+  nohup bash -c "sleep $timeout; $DEADLINE_ACTION \"nuon-runner-mng $phase deadline expired after ${timeout}s (boot $BOOTSTRAP_ATTEMPTS)\"" </dev/null >/dev/null 2>&1 &
+  DEADLINE_PID=$!
+  disown "$DEADLINE_PID" 2>/dev/null || true
+  echo "armed $phase deadline: ${timeout}s, action=$DEADLINE_ACTION, pid=$DEADLINE_PID (boot $BOOTSTRAP_ATTEMPTS/$MAX_BOOTSTRAP_ATTEMPTS)"
+}
+
+arm_deadline "$DEPS_PHASE_TIMEOUT" dependency-install
 
 #
 # install dependencies
@@ -31,6 +59,8 @@ echo "scheduled hard-deadline shutdown in 15m with pid=$SHUTDOWN_PID"
 apt-get update -y
 apt-get install -y docker.io policykit-1 jq
 systemctl enable --now docker
+
+arm_deadline "$RUNNER_PHASE_TIMEOUT" runner-bootstrap
 
 #
 # set up user, home directory, and subdirs for the runner
@@ -130,8 +160,8 @@ for i in $(seq 1 30); do
 done
 
 if [ -z "$RUNNER_BINARY_VERSION" ]; then
-  echo "No runner binary version provided and could not determine from Nuon Runner API - shutting down"
-  /sbin/shutdown -h now "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
+  echo "No runner binary version provided and could not determine from Nuon Runner API"
+  $DEADLINE_ACTION "nuon-runner-mng could not determine RUNNER_BINARY_VERSION"
   exit 1
 fi
 
@@ -294,8 +324,9 @@ for i in $(seq 1 60); do
 done
 
 if [ "$HEALTHY" = "true" ]; then
-    echo "cancelling hard-deadline shutdown (pid=$SHUTDOWN_PID)"
-    kill "$SHUTDOWN_PID" 2>/dev/null || true
+    echo "cancelling bootstrap deadline (pid=$DEADLINE_PID)"
+    cancel_deadline
+    rm -f "$BOOTSTRAP_STATE"
 else
-    echo "nuon-runner-mng failed to stabilize, leaving hard-deadline shutdown in place"
+    echo "nuon-runner-mng failed to stabilize, leaving bootstrap deadline in place"
 fi
