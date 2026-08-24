@@ -34,7 +34,10 @@ systemctl enable --now docker
 
 useradd runner -G docker -c "" -d /opt/nuon/runner
 usermod -a -G root runner # TODO(fd): root?
-mkdir -p /opt/nuon/runner/bin
+mkdir -p /opt/nuon/runner/bin /opt/nuon/runner-data /tmp/nuon-runner
+
+# AL2023 backs /tmp with RAM, so keep runner workspaces on the root EBS volume.
+mount --bind /opt/nuon/runner-data /tmp/nuon-runner
 
 #
 # commands which we want to be able to run w/ passwordless sudo
