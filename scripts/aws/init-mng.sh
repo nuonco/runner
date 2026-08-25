@@ -35,6 +35,7 @@ systemctl enable --now docker
 useradd runner -G docker -c "" -d /opt/nuon/runner
 usermod -a -G root runner # TODO(fd): root?
 mkdir -p /opt/nuon/runner/bin
+install -d -o runner -g runner -m 0700 /opt/nuon/action-workspaces
 
 #
 # commands which we want to be able to run w/ passwordless sudo
