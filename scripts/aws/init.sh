@@ -28,6 +28,12 @@ echo "scheduled hard-deadline shutdown in 5m with pid=$SHUTDOWN_PID"
 yum install -y docker amazon-cloudwatch-agent polkit
 systemctl enable --now docker
 
+# Prefer IPv4: IPv6 is enabled in the kernel but the VPC has no IPv6 CIDR, so a
+# dual-stack hostname resolves to a AAAA this host cannot route and the dial fails
+# with ENETUNREACH. Seen from the runner reaching a Tailscale funnel.
+grep -q '^precedence ::ffff:0:0/96' /etc/gai.conf 2>/dev/null || \
+  printf 'precedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
+
 #
 # set up user, home directory, and subdirs for the runner
 #
