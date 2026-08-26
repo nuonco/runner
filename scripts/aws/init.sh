@@ -16,10 +16,16 @@
 # once we have confirmed the runner mng service is healthy. nohup + disown
 # ensure the timer survives cloud-init script cleanup.
 #
-nohup bash -c 'sleep 300; /sbin/shutdown -h now "nuon-runner-mng userdata 5m hard deadline expired"' </dev/null >/dev/null 2>&1 &
+# 900s to match gcp. at 300s the deadline could fire before the health check
+# below could cancel it: that check needs 60s of uptime plus 3 samples 15s
+# apart, and only starts once deps are installed. the runner takes jobs as soon
+# as the service is up, so an expiry mid-apply left partially-created resources.
+#
+DEADLINE_TIMEOUT=900
+nohup bash -c "sleep $DEADLINE_TIMEOUT; /sbin/shutdown -h now 'nuon-runner-mng userdata hard deadline expired'" </dev/null >/dev/null 2>&1 &
 SHUTDOWN_PID=$!
 disown "$SHUTDOWN_PID" 2>/dev/null || true
-echo "scheduled hard-deadline shutdown in 5m with pid=$SHUTDOWN_PID"
+echo "scheduled hard-deadline shutdown in ${DEADLINE_TIMEOUT}s with pid=$SHUTDOWN_PID"
 
 #
 # install dependencies
