@@ -4,6 +4,7 @@ import time
 
 import urllib3
 import cfnresponse
+from botocore.exceptions import ClientError
 
 http = urllib3.PoolManager()
 
@@ -32,6 +33,25 @@ def auth_header():
         )
         secret = client.get_secret_value(SecretId=arn)["SecretString"]
         token = json.loads(secret).get(os.environ["NUON_PHONE_HOME_ID"])
+    except ClientError as e:
+        error = e.response.get("Error", {})
+        metadata = e.response.get("ResponseMetadata", {})
+        print(
+            "Unable to read phone home token:",
+            json.dumps(
+                {
+                    "type": type(e).__name__,
+                    "operation": e.operation_name,
+                    "code": error.get("Code"),
+                    "message": error.get("Message"),
+                    "http_status": metadata.get("HTTPStatusCode"),
+                    "request_id": metadata.get("RequestId"),
+                    "retry_attempts": metadata.get("RetryAttempts"),
+                },
+                sort_keys=True,
+            ),
+        )
+        return {}
     except Exception as e:
         # Not fatal: send no header and let the API decide, so there is one place
         # that determines the outcome. Log the type only — the message can echo the
