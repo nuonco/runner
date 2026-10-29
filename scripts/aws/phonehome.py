@@ -34,7 +34,7 @@ def auth_header():
         token = json.loads(secret).get(os.environ["NUON_PHONE_HOME_ID"])
     except Exception as e:
         # Not fatal: send no header and let the API decide, so there is one place
-        # that determines the outcome. Log the type only — the message can echo the
+        # that determines the outcome. Log the type only; the message can echo the
         # secret's contents.
         print("Unable to read phone home token:", type(e).__name__)
         return {}
