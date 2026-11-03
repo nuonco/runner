@@ -66,7 +66,8 @@ arm_deadline "$RUNNER_PHASE_TIMEOUT" runner-bootstrap
 # set up user, home directory, and subdirs for the runner
 #
 
-useradd runner -G docker -c "" -d /opt/nuon/runner || true
+id -u runner >/dev/null 2>&1 || useradd runner -c "" -d /opt/nuon/runner
+usermod -a -G docker runner
 usermod -a -G root runner
 mkdir -p /opt/nuon/runner/bin
 install -d -o runner -g runner -m 0700 /opt/nuon/action-workspaces
