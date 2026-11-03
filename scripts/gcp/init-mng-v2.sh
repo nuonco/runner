@@ -178,8 +178,13 @@ RUNNER_SETTINGS=$(curl -s -H "Authorization: Bearer $RUNNER_API_TOKEN" "$RUNNER_
 CONTAINER_IMAGE_URL=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_url":"[^"]*"' | cut -d '"' -f 4)
 CONTAINER_IMAGE_TAG=$(echo "$RUNNER_SETTINGS" | grep -o '"container_image_tag":"[^"]*"' | cut -d '"' -f 4)
 
+# fetch-token writes a long-lived token. mng has to mint its own so it can refresh;
+# loading this file would pin the boot token for the life of the process.
+unset RUNNER_API_TOKEN
+rm -f /opt/nuon/runner/token
+
 #
-# create env files (env, image, token). these env files are used by the systemd unit files AND by the processes they manage.
+# create env files (env, image). these env files are used by the systemd unit files AND by the processes they manage.
 #
 
 # Size container from VM resources, leaving 1Gi host headroom (avoids OOM/page-cache thrash on builds)
@@ -230,7 +235,6 @@ StandardError=file:/var/log/nuon-runner-mng/errors.log
 User=runner
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
-EnvironmentFile=/opt/nuon/runner/token
 Environment="GIT_REF=latest"
 ExecStart=/opt/nuon/runner/bin/runner mng
 Restart=always
