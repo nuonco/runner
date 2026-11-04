@@ -66,9 +66,20 @@ arm_deadline "$RUNNER_PHASE_TIMEOUT" runner-bootstrap
 # set up user, home directory, and subdirs for the runner
 #
 
-useradd runner -G docker -c "" -d /opt/nuon/runner || true
-usermod -a -G docker runner
-usermod -a -G root runner
+FOREIGN_RUNNER_USER=false
+if getent passwd runner >/dev/null; then
+  runner_home=$(getent passwd runner | cut -d: -f6)
+  if [ "$runner_home" != "/opt/nuon/runner" ]; then
+    echo "runner user already exists with unexpected home (${runner_home}) - leaving its group membership alone"
+    FOREIGN_RUNNER_USER=true
+  fi
+else
+  useradd runner -G docker -c "" -d /opt/nuon/runner
+fi
+if [ "$FOREIGN_RUNNER_USER" = false ]; then
+  usermod -a -G docker runner
+  usermod -a -G root runner
+fi
 mkdir -p /opt/nuon/runner/bin
 install -d -o runner -g runner -m 0700 /opt/nuon/action-workspaces
 
