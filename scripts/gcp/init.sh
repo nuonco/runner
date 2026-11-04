@@ -62,10 +62,6 @@ systemctl enable --now docker
 
 arm_deadline "$RUNNER_PHASE_TIMEOUT" runner-bootstrap
 
-#
-# set up user, home directory, and subdirs for the runner
-#
-
 get_metadata() {
     local key=$1
     curl -s -H "Metadata-Flavor: Google" \
@@ -77,76 +73,8 @@ if [ -z "$RUNNER_ID" ]; then
   echo "nuon runner id is empty, cannot create the runner user"
   exit 1
 fi
-RUNNER_USER=$RUNNER_ID
 
-if getent passwd "$RUNNER_USER" >/dev/null; then
-  runner_home=$(getent passwd "$RUNNER_USER" | cut -d: -f6)
-  if [ "$runner_home" != "/opt/nuon/runner" ]; then
-    echo "runner user ${RUNNER_USER} already exists with unexpected home (${runner_home})"
-    exit 1
-  fi
-else
-  useradd "$RUNNER_USER" -G docker -c "" -d /opt/nuon/runner
-fi
-usermod -a -G docker "$RUNNER_USER"
-usermod -a -G root "$RUNNER_USER"
 mkdir -p /opt/nuon/runner/bin
-install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 0700 /opt/nuon/action-workspaces
-
-#
-# commands which we want to be able to run w/ passwordless sudo
-# - fallback for shutdown
-#
-
-cat << EOF > /etc/sudoers.d/runner
-$RUNNER_USER ALL= NOPASSWD: $(which shutdown) -h now
-EOF
-
-#
-# grant group:runner permission to manage the nuon-runner.service via systemd
-#
-
-cat << EOF > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("${RUNNER_USER}")) {
-        return polkit.Result.YES;
-    }
-});
-
-polkit.addRule(function(action, subject) {
-    if (
-        action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "nuon-runner.service" &&
-        subject.isInGroup("${RUNNER_USER}")
-    ) {
-        return polkit.Result.YES;
-    }
-});
-EOF
-
-#
-# grant group:runner permission to shutdown and reboot the VM
-#
-
-cat << EOF > /etc/polkit-1/rules.d/10-runner-shutdown.rules
-polkit.addRule(function(action, subject) {
-    if (
-      (
-        action.id.includes("org.freedesktop.login1.power")      ||
-        action.id.includes("org.freedesktop.login1.reboot")     ||
-        action.id.includes("org.freedesktop.login1.set-reboot-")
-      ) && subject.isInGroup("${RUNNER_USER}")
-    ) {
-        return polkit.Result.YES;
-    }
-});
-EOF
-
-#
-# restart polkit so policies take effect
-#
-
-systemctl restart polkit.service
 
 #
 # gather some facts from GCP metadata
@@ -189,6 +117,76 @@ curl -fsSL https://nuon-artifacts.s3.us-west-2.amazonaws.com/runner/install.sh >
 chmod +x /tmp/install-runner.sh
 RUNNER_API_URL="$RUNNER_API_URL" /tmp/install-runner.sh --no-input "$RUNNER_BINARY_VERSION" /opt/nuon/runner/bin
 rm /tmp/install-runner.sh
+
+#
+# The unit file is rendered by mng after this user exists, so the only copy
+# available here is the template embedded in the binary. Older builds do not
+# carry the marker and still run as the account named runner.
+#
+
+RUNNER_USER=runner
+if grep -a -q 'User={{ .Cfg.RunnerID }}' /opt/nuon/runner/bin/runner 2>/dev/null; then
+  echo "runner binary names its service user from the runner id"
+  RUNNER_USER=$RUNNER_ID
+else
+  echo "runner binary names its service user runner"
+fi
+
+if getent passwd "$RUNNER_USER" >/dev/null; then
+  runner_home=$(getent passwd "$RUNNER_USER" | cut -d: -f6)
+  if [ "$runner_home" != "/opt/nuon/runner" ]; then
+    echo "runner user ${RUNNER_USER} already exists with unexpected home (${runner_home}) - leaving its group membership alone"
+    RUNNER_USER_READY=false
+  else
+    RUNNER_USER_READY=true
+  fi
+else
+  useradd "$RUNNER_USER" -G docker -c "" -d /opt/nuon/runner
+  RUNNER_USER_READY=true
+fi
+if [ "$RUNNER_USER_READY" = true ]; then
+  usermod -a -G docker "$RUNNER_USER"
+  usermod -a -G root "$RUNNER_USER"
+fi
+install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 0700 /opt/nuon/action-workspaces
+
+cat << EOF > /etc/sudoers.d/runner
+$RUNNER_USER ALL= NOPASSWD: $(which shutdown) -h now
+EOF
+
+cat << EOF > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("${RUNNER_USER}")) {
+        return polkit.Result.YES;
+    }
+});
+
+polkit.addRule(function(action, subject) {
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "nuon-runner.service" &&
+        subject.isInGroup("${RUNNER_USER}")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+cat << EOF > /etc/polkit-1/rules.d/10-runner-shutdown.rules
+polkit.addRule(function(action, subject) {
+    if (
+      (
+        action.id.includes("org.freedesktop.login1.power")      ||
+        action.id.includes("org.freedesktop.login1.reboot")     ||
+        action.id.includes("org.freedesktop.login1.set-reboot-")
+      ) && subject.isInGroup("${RUNNER_USER}")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+systemctl restart polkit.service
 
 #
 # change ownership - ensure user runner can execute the runner binary
