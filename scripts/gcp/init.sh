@@ -37,6 +37,7 @@ systemctl enable --now docker
 #
 
 useradd runner -G docker -c "" -d /opt/nuon/runner || true
+usermod -a -G docker runner
 usermod -a -G root runner
 mkdir -p /opt/nuon/runner/bin
 
