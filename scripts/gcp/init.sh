@@ -62,94 +62,25 @@ systemctl enable --now docker
 
 arm_deadline "$RUNNER_PHASE_TIMEOUT" runner-bootstrap
 
-#
-# set up user, home directory, and subdirs for the runner
-#
-
-FOREIGN_RUNNER_USER=false
-if getent passwd runner >/dev/null; then
-  runner_home=$(getent passwd runner | cut -d: -f6)
-  if [ "$runner_home" != "/opt/nuon/runner" ]; then
-    echo "runner user already exists with unexpected home (${runner_home}) - leaving its group membership alone"
-    FOREIGN_RUNNER_USER=true
-  fi
-else
-  useradd runner -G docker -c "" -d /opt/nuon/runner
-fi
-if [ "$FOREIGN_RUNNER_USER" = false ]; then
-  usermod -a -G docker runner
-  usermod -a -G root runner
-fi
-mkdir -p /opt/nuon/runner/bin
-install -d -o runner -g runner -m 0700 /opt/nuon/action-workspaces
-
-#
-# commands which we want to be able to run w/ passwordless sudo
-# - fallback for shutdown
-#
-
-cat << EOF > /etc/sudoers.d/runner
-runner ALL= NOPASSWD: $(which shutdown) -h now
-EOF
-
-#
-# grant group:runner permission to manage the nuon-runner.service via systemd
-#
-
-cat << 'EOF' > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("runner")) {
-        return polkit.Result.YES;
-    }
-});
-
-polkit.addRule(function(action, subject) {
-    if (
-        action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "nuon-runner.service" &&
-        subject.isInGroup("runner")
-    ) {
-        return polkit.Result.YES;
-    }
-});
-EOF
-
-#
-# grant group:runner permission to shutdown and reboot the VM
-#
-
-cat << 'EOF' > /etc/polkit-1/rules.d/10-runner-shutdown.rules
-polkit.addRule(function(action, subject) {
-    if (
-      (
-        action.id.includes("org.freedesktop.login1.power")      ||
-        action.id.includes("org.freedesktop.login1.reboot")     ||
-        action.id.includes("org.freedesktop.login1.set-reboot-")
-      ) && subject.isInGroup("runner")
-    ) {
-        return polkit.Result.YES;
-    }
-});
-EOF
-
-#
-# restart polkit so policies take effect
-#
-
-systemctl restart polkit.service
-
-#
-# gather some facts from GCP metadata
-#
-
 get_metadata() {
     local key=$1
     curl -s -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$key" 2>/dev/null || echo ""
 }
 
-RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
 RUNNER_ID=${NUON_RUNNER_ID:-$(get_metadata "nuon_runner_id")}
+if [ -z "$RUNNER_ID" ]; then
+  echo "nuon runner id is empty, cannot create the runner user"
+  exit 1
+fi
+
+mkdir -p /opt/nuon/runner/bin
+
+#
+# gather some facts from GCP metadata
+#
+
+RUNNER_API_URL=${NUON_RUNNER_API_URL:-$(get_metadata "nuon_runner_api_url")}
 
 # the runner binary version should never fall back to latest.
 # if no value is provided (via metadata/env) leave it empty,
@@ -188,13 +119,83 @@ RUNNER_API_URL="$RUNNER_API_URL" /tmp/install-runner.sh --no-input "$RUNNER_BINA
 rm /tmp/install-runner.sh
 
 #
+# The unit file is rendered by mng after this user exists, so the only copy
+# available here is the template embedded in the binary. Older builds do not
+# carry the marker and still run as the account named runner.
+#
+
+RUNNER_USER=runner
+if grep -a -q 'User={{ .Cfg.RunnerID }}' /opt/nuon/runner/bin/runner 2>/dev/null; then
+  echo "runner binary names its service user from the runner id"
+  RUNNER_USER=$RUNNER_ID
+else
+  echo "runner binary names its service user runner"
+fi
+
+if getent passwd "$RUNNER_USER" >/dev/null; then
+  runner_home=$(getent passwd "$RUNNER_USER" | cut -d: -f6)
+  if [ "$runner_home" != "/opt/nuon/runner" ]; then
+    echo "runner user ${RUNNER_USER} already exists with unexpected home (${runner_home}) - leaving its group membership alone"
+    RUNNER_USER_READY=false
+  else
+    RUNNER_USER_READY=true
+  fi
+else
+  useradd "$RUNNER_USER" -G docker -c "" -d /opt/nuon/runner
+  RUNNER_USER_READY=true
+fi
+if [ "$RUNNER_USER_READY" = true ]; then
+  usermod -a -G docker "$RUNNER_USER"
+  usermod -a -G root "$RUNNER_USER"
+fi
+install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 0700 /opt/nuon/action-workspaces
+
+cat << EOF > /etc/sudoers.d/runner
+$RUNNER_USER ALL= NOPASSWD: $(which shutdown) -h now
+EOF
+
+cat << EOF > /etc/polkit-1/rules.d/50-runner-manage-nuon-service.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.reload-daemon" && subject.isInGroup("${RUNNER_USER}")) {
+        return polkit.Result.YES;
+    }
+});
+
+polkit.addRule(function(action, subject) {
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "nuon-runner.service" &&
+        subject.isInGroup("${RUNNER_USER}")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+cat << EOF > /etc/polkit-1/rules.d/10-runner-shutdown.rules
+polkit.addRule(function(action, subject) {
+    if (
+      (
+        action.id.includes("org.freedesktop.login1.power")      ||
+        action.id.includes("org.freedesktop.login1.reboot")     ||
+        action.id.includes("org.freedesktop.login1.set-reboot-")
+      ) && subject.isInGroup("${RUNNER_USER}")
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+systemctl restart polkit.service
+
+#
 # change ownership - ensure user runner can execute the runner binary
 #
 
-chown -R runner:runner /opt/nuon/runner
+chown -R "$RUNNER_USER:$RUNNER_USER" /opt/nuon/runner
 
 # run mng fetch-token with the runner api url (retry indefinitely every 15s until success)
-while ! sudo -u runner RUNNER_API_URL="$RUNNER_API_URL" CLOUD_PROVIDER=gcp /opt/nuon/runner/bin/runner mng fetch-token; do
+while ! sudo -u "$RUNNER_USER" RUNNER_API_URL="$RUNNER_API_URL" CLOUD_PROVIDER=gcp /opt/nuon/runner/bin/runner mng fetch-token; do
   echo "mng fetch-token failed, retrying in 15s"
   sleep 15
 done
@@ -240,7 +241,7 @@ CONTAINER_IMAGE_TAG=$CONTAINER_IMAGE_TAG
 EOF
 
 # grant the runner ownership over the files here
-chown -R runner:runner /opt/nuon/runner
+chown -R "$RUNNER_USER:$RUNNER_USER" /opt/nuon/runner
 
 #
 # create directory for logs
@@ -252,7 +253,7 @@ mkdir -p /var/log/nuon-runner-mng
 # Create systemd unit file for "runner mng" process
 #
 
-cat << 'EOF' > /etc/systemd/system/nuon-runner-mng.service
+cat << EOF > /etc/systemd/system/nuon-runner-mng.service
 [Unit]
 Description=Nuon Runner Mng Service
 
@@ -260,7 +261,7 @@ Description=Nuon Runner Mng Service
 TimeoutStartSec=0
 StandardOutput=file:/var/log/nuon-runner-mng/logs.log
 StandardError=file:/var/log/nuon-runner-mng/errors.log
-User=runner
+User=$RUNNER_USER
 EnvironmentFile=/opt/nuon/runner/image
 EnvironmentFile=/opt/nuon/runner/env
 EnvironmentFile=/opt/nuon/runner/token
@@ -278,7 +279,7 @@ EOF
 #
 
 touch /etc/systemd/system/nuon-runner.service
-chown runner:runner /etc/systemd/system/nuon-runner.service
+chown "$RUNNER_USER:$RUNNER_USER" /etc/systemd/system/nuon-runner.service
 
 #
 # start the management service
