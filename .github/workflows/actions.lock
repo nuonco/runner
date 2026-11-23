@@ -3,11 +3,38 @@
 # Docs: https://gh.io/actions-lockfile
 version: 'v0.0.3'
 workflows:
+    '.github/workflows/preview-scripts.yml':
+        - 'actions/checkout@v4.4.0'
+        - 'aws-actions/configure-aws-credentials@v4.3.1'
+        - 'dorny/paths-filter@v3.0.4'
+        - 'peter-evans/create-or-update-comment@v5.0.0'
+        - 'peter-evans/find-comment@v3.1.0'
     '.github/workflows/release-scripts.yml':
         - 'actions/checkout@v4.4.0'
+        - 'aws-actions/configure-aws-credentials@v4.3.1'
 dependencies:
     'actions/checkout@v4.4.0':
         ref: 'v4.4.0'
         commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
+    'aws-actions/configure-aws-credentials@v4.3.1':
+        ref: 'v4.3.1'
+        commit: 'sha1-7474bc4690e29a8392af63c5b98e7449536d5c3a'
+        owner_id: 57468012
+        repo_id: 220391287
+    'dorny/paths-filter@v3.0.4':
+        ref: 'v3.0.4'
+        commit: 'sha1-0e4a8c6effa4802afeda77dc8d303f8176d7dfad'
+        owner_id: 1588572
+        repo_id: 265601040
+    'peter-evans/create-or-update-comment@v5.0.0':
+        ref: 'v5.0.0'
+        commit: 'sha1-e8674b075228eee787fea43ef493e45ece1004c9'
+        owner_id: 18365890
+        repo_id: 223708643
+    'peter-evans/find-comment@v3.1.0':
+        ref: 'v3.1.0'
+        commit: 'sha1-3eae4d37986fb5a8592848f6a574fdf654e61f9e'
+        owner_id: 18365890
+        repo_id: 256447541

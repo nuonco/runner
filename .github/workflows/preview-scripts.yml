@@ -1,0 +1,140 @@
+# Publishes init scripts changed by PRs labeled `preview` to
+# runner-scripts/preview/pr-<number>/<short-sha>/<cloud>/. Expires after 30 days.
+# Only cloud dirs (scripts/aws, scripts/azure, scripts/gcp) with a change in the
+# PR are published, and each is published whole, the same set of files a
+# release would attach.
+name: preview-scripts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  AWS_REGION: us-west-2
+  ARTIFACTS_BUCKET: nuon-artifacts
+  ARTIFACTS_PREFIX: runner-scripts
+
+jobs:
+  publish:
+    name: publish preview scripts
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'preview') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Detect changed cloud dirs
+        id: changes
+        uses: dorny/paths-filter@v3.0.4
+        with:
+          filters: |
+            aws:
+              - 'scripts/aws/**'
+            azure:
+              - 'scripts/azure/**'
+            gcp:
+              - 'scripts/gcp/**'
+
+      # Separate role from the release workflow: this one can only write under
+      # runner-scripts/preview/, never to the immutable release paths.
+      - name: Configure AWS credentials
+        if: steps.changes.outputs.changes != '[]'
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_PREVIEW_ROLE_ARN }}
+          role-session-name: gha-runner-scripts-preview-pr-${{ github.event.pull_request.number }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Publish
+        if: steps.changes.outputs.changes != '[]'
+        id: publish
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGED_CLOUDS: ${{ steps.changes.outputs.changes }}
+        run: |
+          set -euo pipefail
+          short_sha="${HEAD_SHA:0:7}"
+          subpath="preview/pr-${PR_NUMBER}/${short_sha}"
+          published="$RUNNER_TEMP/published.md"
+          {
+            echo "| script | url |"
+            echo "| --- | --- |"
+          } > "$published"
+
+          count=0
+          while IFS= read -r cloud; do
+            [ -z "$cloud" ] && continue
+            dir="scripts/$cloud"
+            [ -d "$dir" ] || continue
+            mapfile -t files < <(find "$dir" -maxdepth 1 -type f -not -name '.*' | sort)
+            for f in "${files[@]}"; do
+              name="$(basename "$f")"
+              key="${ARTIFACTS_PREFIX}/${subpath}/${cloud}/${name}"
+              url="https://${ARTIFACTS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${key}"
+              aws s3api put-object \
+                --bucket "$ARTIFACTS_BUCKET" \
+                --key "$key" \
+                --body "$f" \
+                --content-type 'text/plain; charset=utf-8' \
+                --tagging "nuon-retention=preview" \
+                >/dev/null
+              echo "  $cloud/$name -> $url"
+              echo "| \`${cloud}/${name}\` | ${url} |" >> "$published"
+              count=$((count + 1))
+            done
+          done < <(jq -r '.[]' <<< "$CHANGED_CLOUDS")
+
+          {
+            echo "subpath=$subpath"
+            echo "short_sha=$short_sha"
+            echo "count=$count"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build comment body
+        if: steps.publish.outputs.count > 0
+        run: |
+          {
+            echo "<!-- runner-scripts-preview -->"
+            echo "### Preview scripts published"
+            echo
+            echo "Commit \`${{ steps.publish.outputs.short_sha }}\` · prefix \`${ARTIFACTS_PREFIX}/${{ steps.publish.outputs.subpath }}/\` · expires in 30 days · only cloud dirs changed in this PR"
+            echo
+            cat "$RUNNER_TEMP/published.md"
+          } > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Find existing comment
+        if: steps.publish.outputs.count > 0
+        id: find
+        uses: peter-evans/find-comment@v3.1.0
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "<!-- runner-scripts-preview -->"
+
+      - name: Create or update comment
+        if: steps.publish.outputs.count > 0
+        uses: peter-evans/create-or-update-comment@v5.0.0
+        with:
+          comment-id: ${{ steps.find.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ${{ runner.temp }}/comment.md
+          edit-mode: replace

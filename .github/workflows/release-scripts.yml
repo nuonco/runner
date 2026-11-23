@@ -10,6 +10,12 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+
+env:
+  AWS_REGION: us-west-2
+  ARTIFACTS_BUCKET: nuon-artifacts
+  ARTIFACTS_PREFIX: runner-scripts
 
 concurrency:
   group: release-scripts
@@ -38,8 +44,22 @@ jobs:
             | sort -u > /tmp/clouds.txt
           echo "Changed cloud dirs:"
           cat /tmp/clouds.txt || true
+          if [ -s /tmp/clouds.txt ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials
+        if: steps.detect.outputs.changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: gha-runner-scripts-release
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Release each changed cloud
+        if: steps.detect.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,6 +86,46 @@ jobs:
               patch=$((patch + 1))
               new="${cloud}-v${maj}.${min}.${patch}"
             fi
+
+            # Publish to s3://$ARTIFACTS_BUCKET/$ARTIFACTS_PREFIX/<cloud>/v<version>/
+            # before creating the GitHub release, so a failed upload leaves no
+            # tag behind and a re-run retries the same version.
+            #
+            # Released scripts are immutable: the bucket policy rejects any
+            # write without If-None-Match: *, and S3 answers 412 when the key
+            # already exists. A 412 is only OK if the existing object is
+            # byte-identical (a re-run after a partial upload).
+            s3_prefix="${ARTIFACTS_PREFIX}/${cloud}/${new#"${cloud}"-}"
+            echo "Uploading ${#files[@]} file(s) to s3://${ARTIFACTS_BUCKET}/${s3_prefix}/"
+            for f in "${files[@]}"; do
+              key="${s3_prefix}/$(basename "$f")"
+              if out=$(aws s3api put-object \
+                  --bucket "$ARTIFACTS_BUCKET" \
+                  --key "$key" \
+                  --body "$f" \
+                  --content-type 'text/plain; charset=utf-8' \
+                  --checksum-algorithm SHA256 \
+                  --if-none-match '*' 2>&1); then
+                echo "  uploaded $key"
+                continue
+              fi
+              if ! grep -q 'PreconditionFailed' <<< "$out"; then
+                echo "$out" >&2
+                echo "::error::failed to upload $key" >&2
+                exit 1
+              fi
+              want=$(openssl dgst -sha256 -binary "$f" | base64)
+              got=$(aws s3api head-object \
+                --bucket "$ARTIFACTS_BUCKET" \
+                --key "$key" \
+                --checksum-mode ENABLED \
+                --query ChecksumSHA256 --output text)
+              if [ "$want" != "$got" ]; then
+                echo "::error::$key already exists with different content; released scripts are immutable" >&2
+                exit 1
+              fi
+              echo "  exists, identical: $key"
+            done
 
             echo "Creating release $new with ${#files[@]} file(s) from $dir"
             gh release create "$new" \
